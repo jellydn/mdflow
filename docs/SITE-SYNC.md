@@ -16,6 +16,25 @@ Status: **executed 2026-07-06** (same day as the audit below). What landed:
 - `site/vercel.json` carries the ignore-build command so CLI-only pushes
   don't redeploy the site.
 
+Updated **2026-07-17** — the pipeline has since grown:
+
+- `facts.json` now also carries the **agent contract**
+  (`contract.commands`, effect-labelled `contract.operations`,
+  `contract.safetyRules`) and `agentPrompts`, derived from
+  `src/agent-contract.ts`. `MANAGEMENT_COMMANDS` there is the canonical
+  owner of command names/descriptions; subcommand names are scanned from
+  `cli-runner.ts`.
+- A parallel drift-gated pipeline generates agent guidance: `bun run
+  guidance` / `guidance:check` (`scripts/generate-agent-guidance.ts`). The
+  aggregate `bun run verify` runs `facts:check && guidance:check &&
+  package:check`; `facts:check` also runs in `release.yml`.
+- Article pages: `site/content/*.md` render to `dist/<slug>/index.html` via
+  `scripts/build-content.mjs` during `npm run build` — factual claims in
+  articles are hand-checked, not facts-rendered.
+- The shipped `files:` whitelist is narrower than originally proposed:
+  `docs` is scoped to `docs/public-api.md` + `docs/evolve.md`, and
+  `src/**/*.test.ts` is excluded.
+
 ## Remaining manual steps (Vercel dashboard, one-time)
 
 1. In the Vercel project **mdflow.dev** (`prj_GJKQu4COb2mF7TOutclFWxLnQ8cx`),
@@ -95,6 +114,11 @@ The drift-prone content is small and enumerable:
 Add `scripts/generate-facts.ts` that derives these from source (the adapter
 registry export, a new shared `SUBCOMMANDS` table that `printHelp()` also
 renders from, `package.json`) and emits:
+
+> *Shipped differently:* there is no shared `SUBCOMMANDS` table and
+> `printHelp()` does not render from facts — command names/descriptions are
+> owned by `MANAGEMENT_COMMANDS` in `src/agent-contract.ts` and subcommand
+> names are scanned from `cli-runner.ts` (see the 2026-07-17 update at top).
 
 - `site/src/facts.json` — imported by `ManPage.tsx`, `Hero.tsx`, and the
   version badge instead of hardcoded strings.

@@ -1,6 +1,12 @@
 # mdflow New Features Guide
 
-This guide covers the seven major features added to mdflow that take it from a CLI wrapper to developer infrastructure.
+This guide covers the eight major features added to mdflow that take it from a CLI wrapper to developer infrastructure.
+
+> **Note:** this guide documents a historical feature batch. The full current
+> command surface (doctor, render, capture, roster, catalog, hooks, eval,
+> feedback, evolve, and more) is documented in the
+> [README](README.md) and authoritatively in
+> [docs/public-api.md](docs/public-api.md).
 
 ---
 
@@ -467,16 +473,17 @@ Set limits in frontmatter to prevent runaway costs:
 ```yaml
 ---
 _max_prompt_tokens: 50000
-_max_runtime_ms: 30000
 ---
 ```
 
 | Key | Description |
 |-----|-------------|
 | `_max_prompt_tokens` | Reject if estimated prompt tokens exceed this |
-| `_max_runtime_ms` | Maximum execution time in milliseconds |
 
-If a budget is exceeded, mdflow exits with a clear error before spawning the command.
+If the budget is exceeded, mdflow exits with a clear error
+(`PROMPT_TOKEN_LIMIT`) before spawning the command. For wall-clock limits,
+set the `MDFLOW_AGENT_TIMEOUT` environment variable (milliseconds; `0`
+disables, the default).
 
 ### Viewing Telemetry
 
@@ -509,6 +516,10 @@ _mdflow_version: 3.0.0   # stamped when md create / md init wrote the file
 _compat: 3.1.0           # newest mdflow that ran this flow successfully
 ---
 ```
+
+`md create`/`md init` also stamp `_flow_id` — a stable identity that
+feedback records and evolution proposals bind to across renames and clones.
+Like the version stamps, it is never passed to the engine.
 
 How it works:
 
@@ -590,13 +601,13 @@ md review.claude.md --_resume
 | `_output` | object | Structured outputs |
 | `_context_budget_tokens` | number | Context providers |
 | `_max_prompt_tokens` | number | Budget enforcement |
-| `_max_runtime_ms` | number | Budget enforcement |
 
 ### New CLI Flags
 
 | Flag | Feature |
 |------|---------|
 | `--json` | JSON output mode |
+| `--events` | NDJSON run event stream (Flow UX Protocol — see [docs/public-api.md](docs/public-api.md)) |
 | `--engine <name>` | Override engine (`--tool` is a deprecated alias) |
 | `--_resume` | Resume workflow from cache |
 
@@ -607,6 +618,10 @@ md review.claude.md --_resume
 | `md install <spec>` | Agent registry |
 | `md remove <name>` | Agent registry |
 | `md list` | Agent registry |
+
+(Later releases added many more subcommands — doctor, render, capture,
+roster, catalog, hooks, eval, feedback, evolve. See
+[docs/public-api.md](docs/public-api.md) for the current surface.)
 
 ### New Import Syntax
 

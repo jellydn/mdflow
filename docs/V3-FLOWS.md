@@ -65,8 +65,8 @@ host security sandbox. Opt out per flow (`_isolated: false`), per
 invocation (`--_isolated false`), or per machine
 (`commands.<engine>._isolated: false` in config); an isolated flow can also
 re-enable a single layer (`safe-mode: false`). claude gets `--safe-mode
---no-session-persistence`, codex `--ignore-user-config --ephemeral -c
-project_doc_max_bytes=0`, gemini `--extensions none`, copilot
+--no-session-persistence`, codex `--ignore-user-config --ephemeral
+--skip-git-repo-check -c project_doc_max_bytes=0`, gemini `--extensions none`, copilot
 `--no-custom-instructions --disable-builtin-mcps`, opencode `--pure`;
 droid/cursor-agent/agy have no controls, run ambient, and warn only when a
 flow explicitly sets `_isolated: true`. Every flag was verified against the

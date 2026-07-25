@@ -50,6 +50,7 @@ Start every maintenance task with `md doctor --json`. Branch on stable diagnosti
 - **ENGINE** `md evolve propose <flow.md> --yes` — Draft and verify a private off-path proposal.
 - **LOCAL_WRITE** `md evolve apply <run-id>` — Atomically apply a reviewed proposal.
 - **FREE** `md roster --json` — Enumerate discoverable flows.
+- **FREE** `md catalog --json` — Enumerate every discoverable flow (project, global, installed, PATH) with live availability.
 - **FREE** `md roster sync --check` — Check whether the managed operator card is current.
 - **LOCAL_WRITE** `md roster sync` — Synchronize the managed operator card in flows/README.md (README-only; guidance drift is reported, never written).
 - **LOCAL_WRITE** `md roster sync --agents` — With the user's explicit flows-first choice: create or refresh the guidance blocks in AGENTS.md and CLAUDE.md.

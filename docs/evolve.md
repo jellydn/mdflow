@@ -32,7 +32,8 @@ md evolve prune --days 30 --yes           # remove old private attempts/logs
 
 `md complain` remains an alias for `md feedback`. `md evolve --check` remains a
 deprecated alias for `md evolve plan`. Machine use can select `--json`; proposal
-runs also support `--events` for NDJSON progress.
+runs also support `--events` for NDJSON progress. The lifecycle also includes
+`md evolve status`, `history`, `reject`, and `retry`.
 
 ## What the outcome means
 

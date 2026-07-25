@@ -9,20 +9,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## CLI Subcommands
 
 ```bash
-md <file.md> [flags]     # Run a flow
-md init [-e <eng>] [-y]  # Initialize a flow roster (guided by an agent CLI; -y scaffolds)
-md create [name]         # Create a new flow file
+md <file.md> [flags]     # Run a flow (bare `md` opens the Flow Workbench)
+md doctor [--json]       # Inspect project readiness and safe next actions, no execution (free)
+md init [--guided] [-e <eng>] [-y] [--agents] [--print-guide]
+                         # Scaffold a starter roster (deterministic, zero engine
+                         # turns; --guided runs the interactive setup session)
+md create [name]         # Create a flow and a fail-closed draft eval suite
 md capture               # Print the guide an in-session agent follows to capture
                          # the current conversation as a flow (free; see src/capture.ts)
-md explain <flow.md>     # Show resolved config without executing (free)
+md explain <flow.md> [--json]  # Show resolved config without executing (free)
+md render <flow.md>      # Inspect, write, or open a rendered flow explanation
 md hooks add|list|remove <flow.md> [event…]  # Manage the flow's lifecycle hooks file (free)
 md eval <flow.md>        # Run the flow's eval suite (costs engine turns; --plan is free)
 md eval add|list|remove|coverage  # Scaffold/manage suites, fail-closed verdicts, CI ratchet (free)
-md complain <flow.md> "msg"  # Record evolution evidence (free)
-md evolve <flow.md>      # Evidence-gated prompt evolution (--check is free)
+md feedback <flow.md> "msg"  # Record durable evolution evidence (free; `md complain` is an alias)
+md evolve plan|propose|show|apply <flow.md|run-id>  # Proposal-first evolution (plan is free)
 md install <url|gh:...>  # Install a flow into the registry (see src/registry.ts)
 md remove <name>         # Remove an installed registry flow
 md list                  # List installed registry flows
+md roster [sync] [--agents] [--json]  # Inspect flows / sync the managed operator card
+md catalog [--json]      # Machine-readable catalog of every discoverable flow
 md setup                 # Configure shell (PATH, aliases)
 md logs                  # Show flow log directory
 md help                  # Show help
@@ -148,23 +154,31 @@ Vercel with Root Directory = `site`). Rules:
   Design doc: `docs/EVAL-CONVENTION.md`; audits:
   `.artifacts/2026-07-11-eval-hardening-audit-oracle.md`
 
-- **`init.ts`** - `md init`: project bootstrap. Default path launches an
-  installed engine CLI interactively, pre-loaded with `assets/init/guide.md`
-  (passed verbatim — never through the import/template pipeline); post-flight
-  verifies whatever the session wrote. `--yes`/no-TTY scaffolds
-  `assets/init/catalog/` deterministically. `bin/mdflow.mjs` is the
-  plain-Node npx launcher that bridges to bun.
+- **`init.ts`** - `md init`: project bootstrap. Default path scaffolds the
+  `assets/init/catalog/` starter roster deterministically with ZERO engine
+  invocations (never overwrites existing files; no-op when `flows/` already
+  has a roster). `--guided` (or an explicit `--engine`) launches an installed
+  engine CLI interactively, pre-loaded with `assets/init/guide.md` (passed
+  verbatim — never through the import/template pipeline); post-flight
+  verifies whatever the session wrote. `--print-guide` prints that prompt for
+  pasting into any agent session. `bin/mdflow.mjs` is the plain-Node npx
+  launcher that bridges to bun.
 
-- **`evolve.ts`** - `md evolve` / `md complain`: complaints + rough runs →
-  maintainer-drafted revision of the prompt BODY only, applied iff the full
-  eval suite passes and scores no worse than the ancestor's baseline;
-  failures revert byte-identical to `<flow>.pending.md`. Trigger rule is pure
-  (`decideEvolve`) and refuses without a suite or fresh evidence; eval runs
-  can never trigger it (corpus isolation). `evolve: auto` frontmatter opts a
-  flow into post-run auto-evolution (quick re-runs become implicit
-  complaints), hard-gated on trust-ledger `lastCleanAt`. Complaints are
-  consumed only by evolution; rough runs also by a clean eval. Crash-safe via
-  `<flow>.md.evolve-backup`. Verified in `evolve.test.ts`.
+- **`evolve.ts`** - `md evolve` / `md feedback` (`md complain` is a
+  compatibility alias): proposal-first evolution of the prompt BODY only.
+  `evolve plan` (free) previews readiness, capabilities, writes, and bounded
+  invocation cost; `evolve propose` (paid) drafts and evaluates a PRIVATE
+  off-path candidate with verification receipts while the source stays
+  byte-identical; `evolve show <run-id>` reviews it; only a separate explicit
+  `evolve apply <run-id>` mutates the source (`reject`/`retry`/`rollback`/
+  `history`/`prune` complete the lifecycle). "Verified improvement" is
+  claimed only when a feedback-linked case fails on current and passes on
+  the proposal; a green candidate without that is merely "regression-safe".
+  Trigger rule refuses without a suite or fresh evidence; eval runs can
+  never trigger it (corpus isolation). `evolve: auto` frontmatter is a
+  compatibility alias for QUEUED PROPOSAL-ONLY work — unattended apply is
+  intentionally unavailable. Feedback is consumed only by evolution; rough
+  runs also by a clean eval. Verified in `evolve.test.ts`.
 
 - **`adapters/pi-auth.ts`** - Codex-subscription auth bridge for the pi
   engine (`~/.mdflow/pi-agent`, pointed at via PI_CODING_AGENT_DIR); never
@@ -213,6 +227,15 @@ Vercel with Root Directory = `site`). Rules:
   - Symbols: `@./file.ts#InterfaceName` - extract TypeScript symbols
   - Commands: `` !`cmd` `` - inline command output
   - URLs: `@https://example.com/file.md` - fetch remote content
+  - **SHELL-INJECTION NOTE:** template variables are substituted into the
+    `` !`cmd` `` string RAW (unescaped) and the result runs via `sh -c` /
+    `cmd.exe`, exactly like a shell script. For any variable whose value can
+    come from OUTSIDE the flow author (`_stdin`, `_1`/`_2`/`_args`, `--_var`
+    flags), interpolate it through the `shell_escape` filter — aliased `q` —
+    or a shell metacharacter in the value executes: `` !`grep {{ _1 | q }} file` ``.
+    Frontmatter-author-controlled values may be left raw for glob/flag
+    expansion. Verified 2026-07-17 (chaos round: raw `_stdin`/`_1`/`--_var`
+    all achieved command execution; `| q` neutralized it).
 
 - **`env.ts`** - Environment variable loading from .env files
 
@@ -271,12 +294,62 @@ flow can still re-enable one layer (`safe-mode: false`). Per engine:
 | Engine | Flags |
 |--------|-------|
 | claude | `--safe-mode --no-session-persistence` (the latter is print-only, stripped in interactive; `--bare` deliberately NOT used — it breaks OAuth auth) |
-| codex | `--ignore-user-config --ephemeral -c project_doc_max_bytes=0` (first two are exec-only, stripped in interactive) |
+| codex | `--ignore-user-config --ephemeral --skip-git-repo-check -c project_doc_max_bytes=0` (all three flags are exec-only, stripped in interactive; skip-git-repo-check is required because --ignore-user-config drops `[projects]` trust, and exec otherwise refuses to start outside a git repo) |
 | gemini | `--extensions none` (GEMINI.md + settings MCP have no CLI kill-switch) |
 | copilot | `--no-custom-instructions --disable-builtin-mcps` (user MCP config still loads) |
 | opencode | `--pure` (AGENTS.md still loads) |
 | pi | `--no-extensions --no-skills --no-prompt-templates --no-context-files --no-session` |
-| droid / cursor-agent / agy | no controls exist — runs ambient; warns only on an explicit `_isolated: true` |
+| grok | `--no-memory` (disables cross-session memory; MCP/plugins have no CLI kill-switch) |
+| droid / cursor-agent / agy / kimi | no controls exist — runs ambient; warns only on an explicit `_isolated: true` |
+
+**Codex skill discovery + flow provenance (`src/adapters/codex-hooks-home.ts`,
+verified empirically on codex-cli 0.145.0 — 2026-07-24):** an isolated codex
+run leases BOTH `CODEX_HOME` and `HOME`. Skills load from four roots, and only
+CODEX_HOME's is governed by the flags above:
+
+| Source | Leaked before | Now |
+|--------|---------------|-----|
+| `$CODEX_HOME/skills` | built-ins only | leased ✓ |
+| `$HOME/.agents/skills` | **38 on this machine** | leased HOME ✓ (0) |
+| `<project>/.codex/skills` | run refused | disclosed per provenance |
+| `<project>/.agents/skills` | leaked silently (guard missed it) | disclosed per provenance |
+
+There is NO kill-switch for skill discovery: `skills=[]` passes
+`--strict-config` but is inert, `--disable skill_search` changes nothing, and
+no `CODEX_*` env var exists. HOME is the only lever, so the lease becomes the
+run's HOME with an explicit credential allowlist symlinked back
+(`.gitconfig`, `.gitignore_global`, `.ssh`, `.config/git`, `.config/gh`,
+`Library/Keychains` — gh keeps its token in the macOS keyring, which is
+HOME-relative). `rmSync(recursive)` unlinks symlinks without descending
+(verified against decoy targets), so cleanup cannot reach real user state.
+CONSEQUENCE: `~` inside an isolated codex session is the lease, not the user's
+home.
+
+Project skill surfaces are classified by where the flow LIVES, not where it is
+invoked (`classifyFlowProvenance`, both sides canonicalized — macOS reports
+`/private/var` for `/var`, which silently misclassified every resident flow
+under a symlinked root):
+
+- **resident** (flow's project root === cwd's project root) — silent; the
+  project's skills are part of that flow's own contract and ship with every
+  checkout.
+- **visiting** (global/PATH/user flow standing in an unrelated repo) — RUNS,
+  with a disclosed `ISOLATION_REDUCED` stderr warning naming the exact paths.
+  It deliberately does not refuse: refusing made every global flow unusable in
+  any repo carrying a `.codex`, while ambient `$HOME` skills outnumbered
+  project ones ~38:1. `--_cwd <dir>` (which DOES set the engine spawn cwd, via
+  `cli-runner.ts` `commandCwd`) avoids the project entirely.
+- **registry** (installed remote flow) — still FAILS CLOSED; a remote flow
+  absorbing local project context is a trust problem, not a reproducibility one.
+
+Project `.codex/config.toml` no longer leaks (a fresh CODEX_HOME suppresses it;
+an isolated run reports `model: <default>` even when the project pins one), so
+a config-only `.codex` produces no warning. `-c project_doc_max_bytes=0` still
+suppresses AGENTS.md. Discovery walks UP from cwd to the git root
+(`<repo>/sub/deeper` inherits `<repo>/.codex/skills`), so there is no
+run-from-a-subdirectory escape. Free re-probe (no tokens):
+`codex debug prompt-input` prints the model-visible prompt, and
+`codex exec --strict-config` validates config keys before any API call.
 
 **System prompt (`src/system-prompt.ts` + adapter `applySystemPrompt()`):**
 the flow body is always the *user* prompt; `_system-prompt` (replace) and
@@ -432,6 +505,13 @@ task.droid.md       # Print mode: droid exec "..."
 task.i.droid.md     # Interactive: droid "..."
 task.opencode.md    # Print mode: opencode run "..."
 task.i.opencode.md  # Interactive: opencode "..."
+task.grok.md        # Print mode: grok --single "..." (headless single-turn)
+task.i.grok.md      # Interactive: grok "..." (positional prompt → TUI)
+task.kimi.md        # Print mode: kimi --prompt "..."
+task.i.kimi.md      # Interactive: kimi "..."
+chat.i.md           # Interactive with the DEFAULT engine — "i" is the
+                    # interactive marker, never an engine name, and the
+                    # marker alone makes a frontmatter-less file executable
 ```
 
 ### Supported Models by CLI (December 2025)
@@ -497,6 +577,9 @@ Uses [LiquidJS](https://liquidjs.com/) for full template support:
 - Stdin: `{{ _stdin }}` (auto-injected from piped input)
 - Conditionals: `{% if _force %}--force{% endif %}`
 - Filters: `{{ _name | upcase }}`, `{{ _value | default: "fallback" }}`
+- Shell-escape filter: `{{ _var | shell_escape }}` (alias `{{ _var | q }}`)
+  single-quotes a value for safe use inside `` !`cmd` `` — REQUIRED for any
+  untrusted-origin variable in an inline command (see imports.ts note above)
 - CLI override: `--_varname value` matches `_varname` in frontmatter
 
 ## Testing Patterns

@@ -2,6 +2,13 @@
 
 This guide demonstrates 10 progressively more impressive ways to use `mdflow` (`md`). We start with basic scripts and end with a self-orchestrating swarm that works in parallel across multiple git worktrees.
 
+> **Scope:** this tour teaches single-file flow authoring — engines, template
+> variables, imports, piping. The v4 control plane (the `./flows` roster,
+> `md eval`, proposal-first evolution, lifecycle hooks, `md doctor`,
+> `md catalog`, the `--events` stream) lives in the
+> [README](README.md), [GUIDE-NEW-FEATURES.md](GUIDE-NEW-FEATURES.md), and
+> [docs/public-api.md](docs/public-api.md).
+
 ---
 
 ## 1. The "Hello World"
@@ -409,12 +416,10 @@ chmod +x daily-report
 **UX Problem:** You want to expose configuration settings (defaults) that users can easily override via flags.
 **Solution:** Variables starting with `_` in the frontmatter define defaults that can be overridden via `--_varname` flags.
 
-**File:** `14-translator.gpt.md`
+**File:** `14-translator.copilot.md`
 
 ```markdown
 ---
-engine: openai
-model: gpt-4o
 # Default configuration
 _lang: Spanish
 _tone: Professional
@@ -431,10 +436,10 @@ Translate the following text into {{ _lang }}. Keep the tone {{ _tone }}.
 
 ```bash
 # Use defaults
-md 14-translator.gpt.md --_text "Hello World"
+md 14-translator.copilot.md --_text "Hello World"
 
 # Tweak the knobs via flags
-md 14-translator.gpt.md --_text "Hello World" --_lang "Pirate" --_tone "Aggressive"
+md 14-translator.copilot.md --_text "Hello World" --_lang "Pirate" --_tone "Aggressive"
 ```
 
 *UX Benefit: Creates a stable CLI interface for your prompts.*
@@ -579,7 +584,7 @@ md 19-mystery.claude.md
 ```bash
 md logs
 # Agent logs:
-#   /Users/me/.mdflow/logs/19-mystery-claude/
+#   ~/.mdflow/logs/<agent-name>/
 ```
 
 *UX Benefit: Instant forensic debugging without cluttering your terminal.*
@@ -696,6 +701,11 @@ md explain review.claude.md
 ╰───────────────────────────────────────────────────────────────╯
 ```
 
+Agents and GUIs can get the same explanation as a stable JSON object:
+`md explain review.claude.md --json` emits the Flow UX Protocol explanation
+(engine, args, resolved prompt, config fingerprint — see
+[docs/public-api.md](docs/public-api.md)).
+
 *UX Benefit: Understand exactly what md will do before running it.*
 
 ---
@@ -789,22 +799,24 @@ md generate-json.claude.md --raw | jq .
 
 ---
 
-## 26. The History Buff
+## 26. The Flow Workbench
 
-**Concept:** *Frecency-Based File Picker*
-**UX Problem:** You have many agents and finding the right one takes time.
-**Solution:** The interactive picker now sorts by frecency (frequency + recency).
+**Concept:** *Search-First Flow Catalog*
+**UX Problem:** You have many flows spread across projects, global installs, and PATH, and finding the right one takes time.
+**Solution:** Bare `md` opens the Flow Workbench — one searchable catalog of every discoverable flow.
 
 **Run it:**
 
 ```bash
-md   # No arguments - opens the picker
+md   # No arguments - opens the Workbench
 ```
 
-Files you use often and recently appear at the top. The algorithm uses Mozilla/z-style recency buckets:
-- Used in last 4 hours: 4x multiplier
-- Used in last 24 hours: 2x multiplier
-- Used in last week: 0.5x multiplier
-- Older: 0.25x multiplier
+The Workbench lists project flows, globally installed flows, and runnable
+Markdown flows found on `PATH`, each labeled with its provenance
+(`PROJECT`, `GLOBAL`, `INSTALLED`, `PATH`). Type to filter, then pick an
+action per flow — run, dry-run, edit, hooks, feedback — with each action
+marked FREE, ENGINE, or LOCAL WRITE. If the project has no roster yet, a
+"Set up project flows…" row opens guided setup without leaving the
+Workbench. Frequently and recently used flows still sort toward the top.
 
-*UX Benefit: Your most-used agents are always a keystroke away.*
+*UX Benefit: Your entire flow roster — wherever it lives — is a keystroke away.*

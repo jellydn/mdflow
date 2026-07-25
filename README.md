@@ -78,7 +78,7 @@ guard declared behavior. Feedback can drive reviewable, regression-gated prompt 
 - **Engine context isolation is the default, where supported.** Flows run with the
   engine's ambient context stripped using its own verified flags — claude
   `--safe-mode --no-session-persistence`, codex `--ignore-user-config
-  --ephemeral -c project_doc_max_bytes=0`, gemini `--extensions none`,
+  --ephemeral --skip-git-repo-check -c project_doc_max_bytes=0`, gemini `--extensions none`,
   copilot `--no-custom-instructions --disable-builtin-mcps`, opencode
   `--pure`, pi its context-isolation flags. Skills/MCP/context a flow needs are
   declared explicitly in frontmatter; `_isolated: false` opts back into
@@ -592,6 +592,7 @@ task.i.claude.md    # Runs: claude "..." (interactive session)
 task.i.copilot.md   # Runs: copilot --silent --interactive "..."
 task.i.codex.md     # Runs: codex "..." (interactive session)
 task.i.gemini.md    # Runs: gemini --prompt-interactive "..."
+chat.i.md           # Default engine, interactive ("i" is never an engine name)
 ```
 
 Or use `_interactive` (or `_i`) in frontmatter:
@@ -826,6 +827,16 @@ Recent commits:
 
 Based on the above, suggest what to work on next.
 ```
+
+> **Security:** template variables are substituted into the command string
+> **unescaped** and run via your shell, just like a shell script. When a
+> variable can carry untrusted input — piped `{{ _stdin }}`, positional
+> `{{ _1 }}`/`{{ _args }}`, or `--_var` flags — pass it through the
+> `shell_escape` filter (alias `q`) so shell metacharacters can't execute:
+>
+> ```markdown
+> Matches: !`grep {{ _1 | q }} server.log`
+> ```
 
 ### URL Imports
 
