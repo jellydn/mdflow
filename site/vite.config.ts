@@ -1,9 +1,24 @@
+import fs from 'fs';
 import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig(({ mode }) => {
-    const env = loadEnv(mode, '.', '');
+/** Replaces %FACTS_*% tokens in index.html (the static hero shell) from the
+ *  generated src/facts.json, so the pre-React markup can never drift from
+ *  what Hero.tsx renders. */
+const factsHtml = (): Plugin => {
+  const facts = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, 'src/facts.json'), 'utf8'),
+  );
+  return {
+    name: 'facts-html',
+    transformIndexHtml(html) {
+      return html.replaceAll('%FACTS_VERSION_BASE%', facts.versionBase);
+    },
+  };
+};
+
+export default defineConfig(() => {
     return {
       server: {
         port: 3000,
@@ -15,11 +30,7 @@ export default defineConfig(({ mode }) => {
           ? { clientPort: Number(process.env.PORTLESS_PORT) || 1355 }
           : undefined,
       },
-      plugins: [react()],
-      define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-      },
+      plugins: [react(), factsHtml()],
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
@@ -28,12 +39,19 @@ export default defineConfig(({ mode }) => {
       build: {
         rollupOptions: {
           output: {
-            manualChunks(id) {
+            manualChunks(id: string) {
               if (!id.includes('node_modules')) return undefined;
-              if (id.includes('framer-motion')) return 'motion';
+              // Match only the real react packages — a bare '/react/' check
+              // also catches '@wterm/react' and drags the whole terminal
+              // renderer into the eager chunk.
+              if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react';
               if (id.includes('lucide-react')) return 'icons';
-              if (id.includes('/react/') || id.includes('/react-dom/')) return 'react';
-              return 'vendor';
+              // Everything else (framer-motion, @wterm, ...) splits by usage:
+              // statically-imported cores land in the entry chunk, code that
+              // is only reached through dynamic imports stays lazy. Forcing
+              // named chunks here would eagerly load code that only lazy
+              // components need.
+              return undefined;
             },
           },
         },

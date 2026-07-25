@@ -1,6 +1,6 @@
 import type React from "react";
 import { CopyPrompt } from "./CopyPrompt";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import facts from "../src/facts.json";
 
 /**
@@ -32,7 +32,7 @@ export const AgentPrompts: React.FC = () => {
 			<div className="absolute top-[-30%] right-[-15%] w-[700px] h-[700px] bg-blue-600/10 blur-[150px] rounded-full pointer-events-none"></div>
 
 			<div className="max-w-6xl mx-auto relative z-10">
-				<motion.div
+				<m.div
 					initial={{ opacity: 0, y: 24 }}
 					whileInView={{ opacity: 1, y: 0 }}
 					viewport={{ once: true }}
@@ -54,7 +54,7 @@ export const AgentPrompts: React.FC = () => {
 						your ./flows roster, wire the engines, and add behavioral
 						guardrails. You watch.
 					</p>
-				</motion.div>
+				</m.div>
 
 				<div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 					<CopyPrompt

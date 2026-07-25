@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import { Hero } from './components/Hero';
 import { SplitSection } from './components/SplitSection';
 import { Editor } from './components/Editor';
@@ -6,16 +6,28 @@ import { Terminal } from './components/Terminal';
 import { ManPage } from './components/ManPage';
 import { AgentPrompts } from './components/AgentPrompts';
 import { FlowsRoster } from './components/FlowsRoster';
-import { FlowWorkbenchDemo } from './components/FlowWorkbenchDemo';
 import { Evolve } from './components/Evolve';
-import { ShaderGuide } from './components/ShaderGuide';
-import { ShaderHints } from './components/ShaderHints';
-import { CraftedBy } from './components/CraftedBy';
-import { EasterEggs } from './components/EasterEggs';
-import { AlienDefense } from './components/AlienDefense';
-import { shaderAudio } from './components/shaderAudio';
 import { Zap, Volume2, VolumeX } from 'lucide-react';
 import { FlowMark } from './components/FlowMark';
+
+// The decorative/interactive heavyweights (WebGL shader, reactive audio
+// engine, easter eggs, the alien-defense game, Eggo, the wterm workbench)
+// are code-split so the critical bundle only carries above-fold content.
+// They start downloading right after mount, so in practice they appear
+// within a frame or two — but they no longer gate first paint or LCP.
+const ShaderGuide = React.lazy(() => import('./components/ShaderGuide').then(mod => ({ default: mod.ShaderGuide })));
+const ShaderHints = React.lazy(() => import('./components/ShaderHints').then(mod => ({ default: mod.ShaderHints })));
+const EasterEggs = React.lazy(() => import('./components/EasterEggs').then(mod => ({ default: mod.EasterEggs })));
+const AlienDefense = React.lazy(() => import('./components/AlienDefense').then(mod => ({ default: mod.AlienDefense })));
+const CraftedBy = React.lazy(() => import('./components/CraftedBy').then(mod => ({ default: mod.CraftedBy })));
+const FlowWorkbenchDemo = React.lazy(() => import('./components/FlowWorkbenchDemo').then(mod => ({ default: mod.FlowWorkbenchDemo })));
+
+/** Loads the audio engine on first use — it's 60K of source nobody pays
+ *  for unless they actually unmute (the shader chunk shares the module). */
+const withShaderAudio = async (fn: (audio: typeof import('./components/shaderAudio').shaderAudio) => void) => {
+    const { shaderAudio } = await import('./components/shaderAudio');
+    fn(shaderAudio);
+};
 
 /** The X (formerly Twitter) brand mark — lucide has no X logo. */
 const XLogo: React.FC<{ size?: number }> = ({ size = 16 }) => (
@@ -230,18 +242,22 @@ export default function App() {
         <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-blue-900/10 to-transparent"></div>
       </div>
 
-      {/* Mouse-reactive shader that guides the eye to install + getting started */}
-      <ShaderGuide />
-      <ShaderHints
-        muted={muted}
-        onUnmute={() => { shaderAudio.setMuted(false); setMuted(false); }}
-      />
+      {/* Mouse-reactive shader that guides the eye to install + getting
+          started. These are all fixed-position overlays, so a null fallback
+          costs no layout. */}
+      <Suspense fallback={null}>
+        <ShaderGuide />
+        <ShaderHints
+          muted={muted}
+          onUnmute={() => withShaderAudio(audio => { audio.setMuted(false); setMuted(false); })}
+        />
 
-      {/* 22 hidden easter eggs + the five-star secret puzzle */}
-      <EasterEggs />
+        {/* 22 hidden easter eggs + the five-star secret puzzle */}
+        <EasterEggs />
 
-      {/* heart HUD for the alien defense game (ShaderGuide owns the rules) */}
-      <AlienDefense />
+        {/* heart HUD for the alien defense game (ShaderGuide owns the rules) */}
+        <AlienDefense />
+      </Suspense>
 
       {/* Navigation */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/5 bg-[#050505]/80 backdrop-blur-xl">
@@ -263,7 +279,7 @@ export default function App() {
                 </a>
                 <button
                     data-egg="volume"
-                    onClick={() => setMuted(shaderAudio.toggle())}
+                    onClick={() => withShaderAudio(audio => setMuted(audio.toggle()))}
                     aria-label={muted ? 'Unmute reactive soundtrack' : 'Mute reactive soundtrack'}
                     title={muted ? 'Sound: off — click for a reactive soundtrack' : 'Sound: on'}
                     className={`transition-colors hover:drop-shadow-[0_0_8px_rgba(249,115,22,0.6)] ${muted ? 'text-zinc-500 hover:text-white' : 'text-orange-400 hover:text-orange-300'}`}
@@ -277,14 +293,20 @@ export default function App() {
       <main className="relative z-10">
         <Hero />
 
-        {/* Maker credit + Software Factory workshop (full shader treatment) */}
-        <CraftedBy />
+        {/* Maker credit + Software Factory workshop (full shader treatment).
+            The fallback reserves roughly the section's height so late chunk
+            arrival doesn't yank the sections below it upward. */}
+        <Suspense fallback={<section className="relative py-28 px-6 min-h-[60vh]" />}>
+          <CraftedBy />
+        </Suspense>
 
         {/* The concrete mental model: ./flows is your repo's agent roster */}
         <FlowsRoster />
 
         {/* Bare md as the interactive lifecycle workbench, rendered with wterm */}
-        <FlowWorkbenchDemo />
+        <Suspense fallback={<section className="relative px-4 py-24 sm:px-6 md:py-32 min-h-[70vh]" />}>
+          <FlowWorkbenchDemo />
+        </Suspense>
 
         {/* The hero's promise, mechanized: evidence-gated proposals */}
         <Evolve />

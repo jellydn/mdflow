@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 
 /**
  * Discoverability layer for the shader playground. Both affordances wait
@@ -38,7 +38,7 @@ export const ShaderHints: React.FC<{ muted: boolean; onUnmute: () => void }> = (
     return (
         <AnimatePresence>
             {interacted && muted && !nudgeGone && (
-                <motion.button
+                <m.button
                     key="nudge"
                     initial={{ opacity: 0, y: -8 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -49,10 +49,10 @@ export const ShaderHints: React.FC<{ muted: boolean; onUnmute: () => void }> = (
                 >
                     <span className="animate-pulse">♪</span>
                     this page plays music — turn it on
-                </motion.button>
+                </m.button>
             )}
             {interacted && !hintsGone && (
-                <motion.div
+                <m.div
                     key="legend"
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -63,7 +63,7 @@ export const ShaderHints: React.FC<{ muted: boolean; onUnmute: () => void }> = (
                     {coarse
                         ? 'tap · hold to charge · hold then drag to sling · two-finger tap to draw walls'
                         : 'click · hold to charge · drag to sling · shift+click to draw walls'}
-                </motion.div>
+                </m.div>
             )}
         </AnimatePresence>
     );

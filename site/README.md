@@ -19,6 +19,10 @@ bun run facts          # rewrite site/src/facts.json
 bun run facts:check    # CI drift gate (fails if stale)
 ```
 
+Article pages live in [`content/`](content/) (e.g. the evolve deep dive) and
+are rendered to `dist/<slug>/index.html` by `scripts/build-content.mjs`
+during `npm run build` — never link site copy to external article hosts.
+
 Everything else (headlines, shaders, easter eggs, audio) is hand-written art;
 edit freely.
 
@@ -28,8 +32,5 @@ edit freely.
 npm install
 npm run dev        # via portless at http://mdflow.localhost:1355
 npm run dev:raw    # plain vite on its default port
-npm run build      # production build to dist/
+npm run build      # vite build to dist/, then renders content/*.md article pages
 ```
-
-`GEMINI_API_KEY` in `.env.local` is only needed for features that call
-Gemini at runtime; the build itself works without it.

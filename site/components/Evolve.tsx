@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { Editor } from './Editor';
 import { Terminal } from './Terminal';
 import { TerminalLine } from '../types';
@@ -79,7 +79,7 @@ export const Evolve: React.FC = () => {
             <div className="absolute top-[-25%] left-[-15%] w-[700px] h-[700px] bg-emerald-600/10 blur-[150px] rounded-full pointer-events-none"></div>
 
             <div className="max-w-6xl mx-auto relative z-10">
-                <motion.div
+                <m.div
                     initial={{ opacity: 0, y: 24 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
@@ -96,9 +96,9 @@ export const Evolve: React.FC = () => {
                         mdflow drafts a private prompt proposal, checks its capability delta, and measures current
                         versus candidate behavior. Your working tree does not change until you explicitly apply a reviewed run.
                     </p>
-                </motion.div>
+                </m.div>
 
-                <motion.p
+                <m.p
                     initial={{ opacity: 0 }}
                     whileInView={{ opacity: 1 }}
                     viewport={{ once: true }}
@@ -107,10 +107,10 @@ export const Evolve: React.FC = () => {
                 >
                     feedback → reviewed eval → plan → proposal → proof → review → apply. Every transition has
                     stable status and reason codes. <span className="text-zinc-400">Cost and writes are printed before paid work begins.</span>
-                </motion.p>
+                </m.p>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch mb-16">
-                    <motion.div
+                    <m.div
                         initial={{ opacity: 0, x: -24 }}
                         whileInView={{ opacity: 1, x: 0 }}
                         viewport={{ once: true, margin: '-80px' }}
@@ -118,9 +118,9 @@ export const Evolve: React.FC = () => {
                         className="rounded-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden"
                     >
                         <Editor filename="proposal.diff — private; source unchanged" content={DIFF_CONTENT} />
-                    </motion.div>
+                    </m.div>
 
-                    <motion.div
+                    <m.div
                         initial={{ opacity: 0, x: 24 }}
                         whileInView={{ opacity: 1, x: 0 }}
                         viewport={{ once: true, margin: '-80px' }}
@@ -128,12 +128,12 @@ export const Evolve: React.FC = () => {
                         className="min-h-[380px]"
                     >
                         <Terminal lines={TRANSCRIPT} title="proposal-first evolution" isLive />
-                    </motion.div>
+                    </m.div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-14">
                     {GUARANTEES.map((g, i) => (
-                        <motion.div
+                        <m.div
                             key={g.title}
                             initial={{ opacity: 0, y: 16 }}
                             whileInView={{ opacity: 1, y: 0 }}
@@ -144,11 +144,11 @@ export const Evolve: React.FC = () => {
                             <g.icon size={18} className="text-emerald-400 mb-3" />
                             <h3 className="text-white font-semibold mb-1.5 tracking-tight">{g.title}</h3>
                             <p className="text-sm text-zinc-400 font-light leading-relaxed">{g.body}</p>
-                        </motion.div>
+                        </m.div>
                     ))}
                 </div>
 
-                <motion.div
+                <m.div
                     initial={{ opacity: 0 }}
                     whileInView={{ opacity: 1 }}
                     viewport={{ once: true }}
@@ -167,7 +167,7 @@ export const Evolve: React.FC = () => {
                         Read the protocol: evidence, proof, review, rollback
                         <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" />
                     </a>
-                </motion.div>
+                </m.div>
             </div>
         </section>
     );

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Copy, Check, Bot } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 
 interface CopyPromptProps {
     title: string;
@@ -37,7 +37,7 @@ export const CopyPrompt: React.FC<CopyPromptProps> = ({ title, description, prom
     };
 
     return (
-        <motion.div
+        <m.div
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, margin: '-80px' }}
@@ -65,6 +65,6 @@ export const CopyPrompt: React.FC<CopyPromptProps> = ({ title, description, prom
             <div className="border-t border-zinc-800/80 bg-[#050505] px-6 py-5">
                 <pre className="font-mono text-[13px] leading-relaxed text-zinc-300 whitespace-pre-wrap break-words max-h-48 overflow-y-auto">{prompt}</pre>
             </div>
-        </motion.div>
+        </m.div>
     );
 };

@@ -43,7 +43,8 @@ $ md feedback flows/review.md "missed the renamed-file regression"
 Feedback fb_01J… saved for flows/review.md
 
 Status: saved, not yet proved
-Next: md evolve plan flows/review.md
+Next: md feedback distill fb_01J…
+Plan: md evolve plan flows/review.md
 ```
 
 Feedback is private, bounded, and durable. Each item moves through `open →

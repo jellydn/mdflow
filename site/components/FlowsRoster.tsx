@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { Editor } from './Editor';
 import { Terminal } from './Terminal';
 
@@ -15,7 +15,7 @@ export const FlowsRoster: React.FC = () => {
             <div className="absolute bottom-[-30%] left-[-15%] w-[700px] h-[700px] bg-orange-600/10 blur-[150px] rounded-full pointer-events-none"></div>
 
             <div className="max-w-6xl mx-auto relative z-10">
-                <motion.div
+                <m.div
                     initial={{ opacity: 0, y: 24 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
@@ -32,9 +32,9 @@ export const FlowsRoster: React.FC = () => {
                         They're diffable in PRs. They're provable with <span className="text-white font-mono text-base">md eval</span>.
                         And new teammates, human or AI, learn how the project actually works by reading them.
                     </p>
-                </motion.div>
+                </m.div>
 
-                <motion.p
+                <m.p
                     initial={{ opacity: 0 }}
                     whileInView={{ opacity: 1 }}
                     viewport={{ once: true }}
@@ -45,10 +45,10 @@ export const FlowsRoster: React.FC = () => {
                     Run it on any engine. Every rough run is raw material. Bad outputs become failing
                     eval cases. Fixes arrive as reviewable diffs. Nothing lands unless the suite passes.
                     Your agents get better because you used them.
-                </motion.p>
+                </m.p>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-                    <motion.div
+                    <m.div
                         initial={{ opacity: 0, x: -24 }}
                         whileInView={{ opacity: 1, x: 0 }}
                         viewport={{ once: true, margin: '-80px' }}
@@ -59,8 +59,8 @@ export const FlowsRoster: React.FC = () => {
                             filename="flows/"
                             content={`flows/\n├── README.md          # the roster index\n├── review.md          # review staged changes\n├── review.eval.ts     # proof it catches bugs\n├── release.md         # draft release notes\n├── release.eval.ts\n├── triage.md          # label + rank new issues\n└── triage.eval.ts\n\n# .mdflow.yaml\nengine: pi             # project default\nevolve:\n  mode: suggest        # notify; never spend or apply`}
                         />
-                    </motion.div>
-                    <motion.div
+                    </m.div>
+                    <m.div
                         initial={{ opacity: 0, x: 24 }}
                         whileInView={{ opacity: 1, x: 0 }}
                         viewport={{ once: true, margin: '-80px' }}
@@ -78,7 +78,7 @@ export const FlowsRoster: React.FC = () => {
                                 { id: '6', type: 'info', content: 'clean run recorded in trust ledger' }
                             ]}
                         />
-                    </motion.div>
+                    </m.div>
                 </div>
             </div>
         </section>

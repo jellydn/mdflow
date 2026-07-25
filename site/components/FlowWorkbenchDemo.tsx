@@ -8,7 +8,7 @@ import React, {
 } from 'react';
 import { Terminal, useTerminal } from '@wterm/react';
 import '@wterm/react/css';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import {
     ArrowRight,
     Check,
@@ -440,7 +440,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_70%_55%,rgba(34,211,238,0.05),transparent_35%)]" />
 
             <div className="relative z-10 mx-auto max-w-7xl">
-                <motion.div
+                <m.div
                     initial={reducedMotion ? false : { opacity: 0, y: 20 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
@@ -464,7 +464,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
                         then how <span className="font-mono text-white">md</span> creates one from an empty terminal,
                         evolves it from evidence, and resolves personal flows everywhere.
                     </p>
-                </motion.div>
+                </m.div>
 
                 <div className="grid gap-6 lg:grid-cols-[minmax(280px,0.76fr)_minmax(0,2fr)] lg:items-stretch">
                     <div
@@ -481,7 +481,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
                             const active = state.storyId === item.id;
                             const Icon = STORY_ICONS[item.id];
                             return (
-                                <motion.button
+                                <m.button
                                     key={item.id}
                                     type="button"
                                     data-story-select={item.id}
@@ -510,7 +510,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
                                         <span className="truncate">{item.keyHint}</span>
                                         <ArrowRight size={11} className="shrink-0 transition-transform group-hover:translate-x-0.5" />
                                     </div>
-                                </motion.button>
+                                </m.button>
                             );
                         })}
 
@@ -520,7 +520,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
                         </div>
                     </div>
 
-                    <motion.div
+                    <m.div
                         initial={reducedMotion ? false : { opacity: 0, y: 18 }}
                         whileInView={{ opacity: 1, y: 0 }}
                         viewport={{ once: true, margin: '-80px' }}
@@ -718,7 +718,7 @@ export const FlowWorkbenchDemo: React.FC = () => {
                                 />
                             )}
                         </div>
-                    </motion.div>
+                    </m.div>
                 </div>
 
                 <div

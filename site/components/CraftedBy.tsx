@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { Zap, ArrowRight } from 'lucide-react';
 import { EggoInteractive, StretchName } from './EggoInteractive';
 
@@ -164,7 +164,7 @@ export const CraftedBy: React.FC = () => {
 
     return (
         <section className="relative py-28 px-6">
-            <motion.div
+            <m.div
                 initial={{ opacity: 0, y: 24 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: '-80px' }}
@@ -248,7 +248,7 @@ export const CraftedBy: React.FC = () => {
                         </a>
                     </div>
                 </div>
-            </motion.div>
+            </m.div>
         </section>
     );
 };

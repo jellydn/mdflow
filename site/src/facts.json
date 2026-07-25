@@ -11,9 +11,11 @@
     "opencode",
     "pi",
     "cursor-agent",
-    "agy"
+    "agy",
+    "grok",
+    "kimi"
   ],
-  "enginesLabel": "claude, copilot, codex, gemini, droid, opencode, pi, cursor-agent, agy (Antigravity)",
+  "enginesLabel": "claude, copilot, codex, gemini, droid, opencode, pi, cursor-agent, agy (Antigravity), grok, kimi",
   "install": "npx mdflow",
   "repo": "https://github.com/johnlindquist/mdflow",
   "ladder": [
@@ -117,6 +119,11 @@
       "name": "roster",
       "usage": "roster --json | roster sync [--check] [--agents] [--json]",
       "description": "Inspect flows or synchronize the managed operator card"
+    },
+    {
+      "name": "catalog",
+      "usage": "catalog [--json]",
+      "description": "Machine-readable catalog of every discoverable flow (project, global, installed, PATH)"
     },
     {
       "name": "setup",
@@ -225,6 +232,12 @@
         "name": "roster",
         "usage": "roster --json | roster sync [--check] [--agents] [--json]",
         "summary": "Inspect flows or synchronize the managed operator card",
+        "json": true
+      },
+      {
+        "name": "catalog",
+        "usage": "catalog [--json]",
+        "summary": "Machine-readable catalog of every discoverable flow (project, global, installed, PATH)",
         "json": true
       },
       {
@@ -418,6 +431,13 @@
         "id": "roster.inspect",
         "command": "md roster --json",
         "summary": "Enumerate discoverable flows",
+        "effect": "FREE",
+        "consent": "none"
+      },
+      {
+        "id": "catalog.inspect",
+        "command": "md catalog --json",
+        "summary": "Enumerate every discoverable flow (project, global, installed, PATH) with live availability",
         "effect": "FREE",
         "consent": "none"
       },

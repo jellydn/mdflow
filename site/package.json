@@ -14,14 +14,12 @@
     "og-image": "node scripts/generate-og-image.mjs"
   },
   "dependencies": {
-    "@google/genai": "^1.32.0",
     "@wterm/dom": "0.3.0",
     "@wterm/react": "0.3.0",
     "framer-motion": "^12.23.25",
     "lucide-react": "^0.556.0",
     "react": "^19.2.1",
-    "react-dom": "^19.2.1",
-    "uuid": "^13.0.0"
+    "react-dom": "^19.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

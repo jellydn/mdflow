@@ -3,7 +3,7 @@ import { TerminalLine } from '../types';
 import { Terminal } from './Terminal';
 import { Editor } from './Editor';
 import { ArrowDown, Copy, Check, Zap, ChevronRight } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import facts from '../src/facts.json';
 
 const HERO_MD = `---
@@ -68,12 +68,11 @@ export const Hero: React.FC = () => {
 
                 {/* Text Content */}
                 <div className="lg:col-span-6 flex flex-col justify-center space-y-8">
-                    <motion.div
-                        initial={{ opacity: 0, y: 30 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.8, ease: "easeOut" }}
-                        className="select-none"
-                    >
+                    {/* No entrance animation here: this block is the LCP
+                        element and a static copy of it paints from index.html
+                        before React mounts — animating it would both delay
+                        LCP and make the mount swap visibly flicker. */}
+                    <div className="select-none">
                         <div className="flex items-center gap-3 mb-8">
                             <div data-egg="v3" className="inline-flex items-center px-4 py-1.5 rounded-full border border-orange-500/50 bg-orange-950/30 text-xs font-mono text-orange-200 backdrop-blur-md shadow-[0_0_15px_rgba(249,115,22,0.3)] cursor-pointer">
                                 <Zap size={12} className="mr-2 text-orange-400 fill-orange-400" />
@@ -107,9 +106,9 @@ export const Hero: React.FC = () => {
                             <span className="text-white font-semibold">Evals</span> that guard declared behavior.<br/>
                             Feedback becomes capability-checked, reviewable proposals.
                         </p>
-                    </motion.div>
+                    </div>
 
-                    <motion.div
+                    <m.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ delay: 0.5, duration: 0.6 }}
@@ -141,12 +140,12 @@ export const Hero: React.FC = () => {
                             <span className="font-mono text-zinc-400"> ./flows</span>, or a setup prompt to paste
                             into any agent. Once a roster exists, the same command opens the Workbench.
                         </p>
-                    </motion.div>
+                    </m.div>
                 </div>
 
                 {/* Hero Demo - Hidden on small mobile, visible on desktop */}
                 <div className="lg:col-span-6 h-[600px] relative hidden lg:block perspective-1000">
-                    <motion.div
+                    <m.div
                         animate={{
                             rotateY: [0, -5, 0],
                             rotateX: [0, 5, 0],
@@ -160,7 +159,7 @@ export const Hero: React.FC = () => {
                         className="relative w-full h-full preserve-3d"
                     >
                         {/* Editor Window */}
-                        <motion.div
+                        <m.div
                             className="absolute w-[70%] h-[70%] shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 rounded-xl bg-[#0d1117] cursor-pointer overflow-hidden"
                             initial={false}
                             animate={{
@@ -180,10 +179,10 @@ export const Hero: React.FC = () => {
                         >
                             <Editor filename="research.md" content={HERO_MD} />
                             <div className="absolute inset-0 -z-10 bg-orange-500/20 blur-xl rounded-xl"></div>
-                        </motion.div>
+                        </m.div>
 
                         {/* Terminal Window */}
-                        <motion.div
+                        <m.div
                             className="absolute w-[70%] h-[70%] shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 rounded-xl bg-[#09090b] cursor-pointer overflow-hidden"
                             initial={false}
                             animate={{
@@ -203,7 +202,7 @@ export const Hero: React.FC = () => {
                         >
                             <Terminal lines={lines} title="mdflow-cli" isLive={true} />
                             <div className="absolute inset-0 -z-10 bg-blue-500/20 blur-xl rounded-xl"></div>
-                        </motion.div>
+                        </m.div>
 
                         {/* Connecting Line Visualization */}
                         <svg className="absolute inset-0 w-full h-full pointer-events-none z-25 drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]">
@@ -223,7 +222,7 @@ export const Hero: React.FC = () => {
                                 </linearGradient>
                             </defs>
                         </svg>
-                    </motion.div>
+                    </m.div>
                 </div>
             </div>
         </div>
