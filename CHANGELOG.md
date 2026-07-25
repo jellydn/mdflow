@@ -1,3 +1,10 @@
+# [4.9.0](https://github.com/johnlindquist/mdflow/compare/v4.8.0...v4.9.0) (2026-07-25)
+
+
+### Features
+
+* **cli:** provenance-aware codex isolation, grok/kimi engines, flow catalog ([c3052a3](https://github.com/johnlindquist/mdflow/commit/c3052a36b92dde40c2887d15a5525b9bb2fd924e))
+
 # [4.8.0](https://github.com/johnlindquist/mdflow/compare/v4.7.0...v4.8.0) (2026-07-16)
 
 
