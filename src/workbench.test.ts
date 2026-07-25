@@ -17,6 +17,7 @@ import {
 } from "./workbench";
 import type { WorkbenchHooksStatus } from "./workbench-hooks";
 import { workbenchInputPrompt } from "./workbench-input";
+import { CLEAR_SCREEN } from "./use-terminal-size";
 
 const flows: AgentFile[] = [
 	{
@@ -243,6 +244,7 @@ async function promptHarness(
 			projectRoot: "/repo",
 			cwd: "/repo",
 			pageSize: 10,
+			terminal: output,
 			...overrides,
 		},
 		{ input, output, clearPromptOnDone: true },
@@ -252,6 +254,12 @@ async function promptHarness(
 		pending,
 		async press(event: TestKeypressEvent) {
 			input.emit("keypress", event.sequence ?? "", event);
+			await Bun.sleep(0);
+		},
+		async resize(columns: number, rows: number) {
+			output.columns = columns;
+			output.rows = rows;
+			output.emit("resize");
 			await Bun.sleep(0);
 		},
 		takeOutput() {
@@ -544,9 +552,17 @@ describe("Flow Workbench keypress path", () => {
 		expect(prompt.takeOutput()).toContain("Creating in CURRENT DIRECTORY");
 		await prompt.press(key("right"));
 		const globalScope = prompt.takeOutput();
-		expect(globalScope).toContain("Creating GLOBALLY");
-		expect(globalScope).toContain("(available from");
-		expect(globalScope).toContain("any directory as md new-flow)");
+		// The scope sentence wraps across terminal lines, pane separators, and
+		// ANSI resets, so compare against a flattened rendering.
+		const flattenedScope = globalScope
+			.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
+			.replace(/[│]/g, " ")
+			.replace(/\s+/g, " ");
+		expect(flattenedScope).toContain("Creating GLOBALLY");
+		expect(flattenedScope).toContain("~/.mdflow/flows/new-flow.md");
+		expect(flattenedScope).toContain(
+			"(available from any directory as md new-flow)",
+		);
 		await prompt.press(key("tab", "\t"));
 		await prompt.press(key("r"));
 		await prompt.press(key("tab", "\t"));
@@ -604,5 +620,50 @@ describe("Flow Workbench keypress path", () => {
 		input.emit("keypress", "\t", key("tab", "\t"));
 		input.emit("keypress", "", key("enter"));
 		expect(await pending).toBe("previous");
+	});
+});
+
+describe("Flow Workbench terminal resize", () => {
+	const stripAnsi = (text: string) =>
+		// eslint-disable-next-line no-control-regex
+		text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+	const widestDividerIn = (frame: string) =>
+		Math.max(
+			0,
+			...[...stripAnsi(frame).matchAll(/─+/g)].map((m) => m[0].length),
+		);
+
+	test("relayouts to the new width when the terminal pane resizes", async () => {
+		const prompt = await promptHarness();
+		expect(widestDividerIn(prompt.takeOutput())).toBe(98);
+
+		await prompt.resize(60, 20);
+		const frame = prompt.takeOutput();
+		expect(frame).toContain(CLEAR_SCREEN);
+		expect(frame.indexOf(CLEAR_SCREEN)).toBeLessThan(frame.indexOf("─"));
+		expect(widestDividerIn(frame)).toBe(58);
+
+		await prompt.press(key("escape"));
+		expect(await prompt.pending).toMatchObject({ action: "cancel" });
+	});
+
+	test("collapses to a single column instead of overflowing a narrow pane", async () => {
+		// Chaos regression (2026-07-17): the layout floored its render width
+		// at 52 columns, so a ~23-column split pane soft-wrapped every row
+		// and the list + preview interleaved into garbage.
+		const prompt = await promptHarness();
+		prompt.takeOutput();
+
+		await prompt.resize(24, 30);
+		const frame = stripAnsi(prompt.takeOutput());
+		// No two-column separator: the preview column is dropped entirely.
+		expect(frame).not.toContain("│");
+		// Rendered rules never exceed the real terminal width.
+		expect(widestDividerIn(frame)).toBeLessThanOrEqual(24);
+		// The list itself is still there.
+		expect(frame).toContain("release-notes.md");
+
+		await prompt.press(key("escape"));
+		expect(await prompt.pending).toMatchObject({ action: "cancel" });
 	});
 });

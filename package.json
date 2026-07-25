@@ -35,7 +35,9 @@
     "facts": "bun run scripts/generate-facts.ts",
     "facts:check": "bun run scripts/generate-facts.ts --check",
     "guidance": "bun run scripts/generate-agent-guidance.ts",
-    "guidance:check": "bun run scripts/generate-agent-guidance.ts --check"
+    "guidance:check": "bun run scripts/generate-agent-guidance.ts --check",
+    "verify:codex-isolation": "bun test src/adapters/codex-hooks-home.test.ts src/isolation.test.ts src/command.test.ts src/cli-runner.test.ts src/hooks-integration.test.ts src/isolation-integration.test.ts && bun run typecheck",
+    "probe:codex-isolation": "bun run scripts/probe-codex-isolation.ts"
   },
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",

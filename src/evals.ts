@@ -765,7 +765,11 @@ export async function isVerificationCurrent(
 export function recordEvalResult(
   suite: string,
   result: Omit<EvalLedgerEntry, "lastCleanAt" | "lastFullRunAt" | "latestRun" | "schemaVersion">,
-  path = evalLedgerPath()
+  path = evalLedgerPath(),
+  // Parallel eval runs briefly contend for the ledger lock; wait it out so a
+  // completed (paid) run's receipt is never dropped. Tests pass a short
+  // window to keep a deliberately-stuck-lock assertion fast.
+  contendMs = 5_000
 ): void {
   withAtomicFileLock(path, () => {
     // readEvalLedger throws on unreadable/corrupt content — a broken ledger
@@ -819,7 +823,7 @@ export function recordEvalResult(
     all[suite] = entry;
     all[`flow:${flowId}`] = entry;
     atomicWriteJson(path, all);
-  });
+  }, 60_000, contendMs);
 }
 
 /**

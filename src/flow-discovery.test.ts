@@ -36,7 +36,14 @@ describe("discoverFlowCatalog", () => {
 			join(project, "flows", "release", "review.claude.md"),
 			"Review release",
 		);
-		writeFlow(join(home, ".mdflow", "personal.codex.md"), "Personal helper");
+		writeFlow(
+			join(home, ".mdflow", "flows", "personal.codex.md"),
+			"Personal helper",
+		);
+		writeFlow(
+			join(home, ".mdflow", "legacy.codex.md"),
+			"Legacy personal helper",
+		);
 		writeFlow(
 			join(home, ".mdflow", "logs", "private.claude.md"),
 			"Must stay hidden",
@@ -46,7 +53,6 @@ describe("discoverFlowCatalog", () => {
 		const catalog = await discoverFlowCatalog({
 			cwd: project,
 			homeDir: home,
-			pathEnv: "",
 			scorePath: () => 0,
 		});
 
@@ -56,6 +62,7 @@ describe("discoverFlowCatalog", () => {
 		expect(catalog.flows.map((flow) => flow.name)).toContain(
 			"personal.codex.md",
 		);
+		expect(catalog.flows.map((flow) => flow.name)).toContain("legacy.codex.md");
 		expect(
 			catalog.flows.some((flow) => flow.path.includes("/.mdflow/logs/")),
 		).toBe(false);
@@ -73,7 +80,15 @@ describe("discoverFlowCatalog", () => {
 			catalog.flows.find((flow) => flow.name === "personal.codex.md"),
 		).toMatchObject({
 			scope: "global",
+			origin: "global-flows",
 			provenanceLabel: "GLOBAL",
+		});
+		expect(
+			catalog.flows.find((flow) => flow.name === "legacy.codex.md"),
+		).toMatchObject({
+			scope: "global",
+			origin: "global-personal",
+			provenanceLabel: "GLOBAL · LEGACY",
 		});
 	});
 
@@ -108,7 +123,6 @@ describe("discoverFlowCatalog", () => {
 		const catalog = await discoverFlowCatalog({
 			cwd: project,
 			homeDir: home,
-			pathEnv: "",
 			scorePath: () => 0,
 		});
 
@@ -127,32 +141,88 @@ describe("discoverFlowCatalog", () => {
 		);
 	});
 
-	test("includes runnable flows from PATH and excludes ordinary PATH documents", async () => {
+	test("discovers config-declared roster directories with provenance", async () => {
 		const { project, home } = fixture();
-		const bin = join(project, "tools", "bin");
-		writeFlow(join(bin, "release.pi.md"), "Release helper");
-		mkdirSync(bin, { recursive: true });
-		writeFileSync(join(bin, "README.md"), "# Tool documentation\n");
-		writeFileSync(join(bin, "notes.md"), "Ordinary markdown document\n");
+		const extraGlobal = join(home, "extra-roster");
+		writeFlow(join(extraGlobal, "nested", "zsh.codex.md"), "zsh config");
+		writeFlow(join(project, "team-roster", "review.claude.md"), "Team review");
+		mkdirSync(join(home, ".mdflow"), { recursive: true });
+		writeFileSync(
+			join(home, ".mdflow", "config.yaml"),
+			"flows:\n  directories:\n    - ~/extra-roster\n",
+		);
+		writeFileSync(
+			join(project, ".mdflow.yaml"),
+			"flows:\n  directories:\n    - ./team-roster\n",
+		);
 
 		const catalog = await discoverFlowCatalog({
 			cwd: project,
 			homeDir: home,
-			pathEnv: bin,
 			scorePath: () => 0,
 		});
 
 		expect(
-			catalog.flows.find((flow) => flow.name === "release.pi.md"),
+			catalog.flows.find((flow) => flow.name === "nested/zsh.codex.md"),
 		).toMatchObject({
 			scope: "global",
-			origin: "path",
-			provenanceLabel: "PATH",
+			origin: "global-config",
+			provenanceLabel: "GLOBAL · CONFIG",
 			availability: { state: "ready" },
 		});
-		expect(catalog.flows.some((flow) => flow.name === "notes.md")).toBe(false);
-		expect(catalog.flows.some((flow) => flow.name === "README.md")).toBe(false);
-		expect(catalog.counts).toMatchObject({ global: 0, path: 1 });
+		expect(
+			catalog.flows.find((flow) => flow.name === "review.claude.md"),
+		).toMatchObject({
+			scope: "project",
+			origin: "project-config",
+			provenanceLabel: "PROJECT · CONFIG",
+		});
+		expect(catalog.counts).toMatchObject({ project: 1, global: 1 });
+	});
+
+	test("a declared directory overlapping a standard roster keeps the roster's provenance", async () => {
+		const { project, home } = fixture();
+		writeFlow(join(project, "flows", "review.claude.md"), "Review");
+		mkdirSync(join(home, ".mdflow"), { recursive: true });
+		writeFileSync(
+			join(home, ".mdflow", "config.yaml"),
+			`flows:\n  directories:\n    - ${join(project, "flows")}\n`,
+		);
+
+		const catalog = await discoverFlowCatalog({
+			cwd: project,
+			homeDir: home,
+			scorePath: () => 0,
+		});
+
+		expect(
+			catalog.flows.filter((flow) => flow.name === "review.claude.md"),
+		).toHaveLength(1);
+		expect(
+			catalog.flows.find((flow) => flow.name === "review.claude.md"),
+		).toMatchObject({ scope: "project", provenanceLabel: "PROJECT" });
+	});
+
+	test("a missing declared directory surfaces a diagnostic instead of vanishing", async () => {
+		const { project, home } = fixture();
+		mkdirSync(join(home, ".mdflow"), { recursive: true });
+		writeFileSync(
+			join(home, ".mdflow", "config.yaml"),
+			"flows:\n  directories:\n    - ~/does-not-exist\n",
+		);
+
+		const catalog = await discoverFlowCatalog({
+			cwd: project,
+			homeDir: home,
+			scorePath: () => 0,
+		});
+
+		expect(catalog.diagnostics).toContainEqual(
+			expect.objectContaining({
+				scope: "global",
+				code: "DIRECTORY_UNREADABLE",
+			}),
+		);
 	});
 
 	test("retains same-name project and global flows as distinct choices", async () => {
@@ -163,7 +233,6 @@ describe("discoverFlowCatalog", () => {
 		const catalog = await discoverFlowCatalog({
 			cwd: project,
 			homeDir: home,
-			pathEnv: "",
 			scorePath: () => 0,
 		});
 		expect(

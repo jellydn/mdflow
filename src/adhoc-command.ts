@@ -29,6 +29,8 @@ export const SUPPORTED_COMMANDS = [
   "pi",
   "cursor-agent",
   "agy",
+  "grok",
+  "kimi",
 ] as const;
 
 export type SupportedCommand = string;
@@ -67,10 +69,26 @@ export interface AdhocCommandResult {
  * @param argv - The process.argv array
  * @returns The parsed ad-hoc command result
  */
-export function detectAdhocCommand(argv: string[]): AdhocCommandResult {
+export function detectAdhocCommand(
+  argv: string[],
+  invokedAs?: string
+): AdhocCommandResult {
   // argv[0] is the runtime (node/bun), argv[1] is the script/command
   // For symlinks: argv[1] might be "md.claude"
   // For bun run: argv[1] might be the full path to index.ts
+  // The node launcher (bin/mdflow.mjs) erases both names when it bridges to
+  // bun, so it forwards the original executable name via MDFLOW_INVOKED_AS.
+
+  if (invokedAs) {
+    const forwarded = parseAdhocFromName(basename(invokedAs));
+    if (forwarded.isAdhoc) {
+      return parseAdhocArgs(
+        forwarded.command!,
+        forwarded.interactive ?? false,
+        argv.slice(2)
+      );
+    }
+  }
 
   // Check argv[1] first (the command/script name)
   const scriptName = argv[1] ? basename(argv[1]) : "";

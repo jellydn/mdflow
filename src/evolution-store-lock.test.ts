@@ -56,4 +56,27 @@ describe("withAtomicFileLock hardening (F9)", () => {
     expect(withAtomicFileLock(target, () => "second")).toBe("second");
     expect(existsSync(lockPath)).toBe(false);
   });
+
+  test("a live-pid lock is retried for the contention window before failing", () => {
+    // Chaos round 5: parallel eval runs that finished their (paid) engine
+    // invocation lost the receipt because the ledger lock threw "busy" on the
+    // FIRST collision. The writer must now retry for the contention window.
+    // (Real contention is cross-process — separate bun processes each hold
+    // the lock briefly; verified live with 24 concurrent eval runs all
+    // succeeding. Here we assert the retry TIMING in-process: a permanently
+    // held live-pid lock is retried for ~window ms, not failed immediately.)
+    const target = join(tempDir, "state.json");
+    const lockPath = `${target}.lock`;
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+    );
+    const started = Date.now();
+    expect(() =>
+      withAtomicFileLock(target, () => "never", 60_000, 300),
+    ).toThrow(/busy/);
+    const waited = Date.now() - started;
+    // It retried for roughly the window rather than throwing on first collision.
+    expect(waited).toBeGreaterThanOrEqual(250);
+  });
 });

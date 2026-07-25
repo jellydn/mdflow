@@ -128,6 +128,13 @@ export const MANAGEMENT_COMMANDS = [
 		json: true,
 	},
 	{
+		name: "catalog",
+		usage: "catalog [--json]",
+		summary:
+			"Machine-readable catalog of every discoverable flow (project, global, installed, PATH)",
+		json: true,
+	},
+	{
 		name: "setup",
 		usage: "setup",
 		summary: "Configure shell integration",
@@ -330,6 +337,14 @@ export const OPERATIONS = [
 		id: "roster.inspect",
 		command: "md roster --json",
 		summary: "Enumerate discoverable flows",
+		effect: "FREE",
+		consent: "none",
+	},
+	{
+		id: "catalog.inspect",
+		command: "md catalog --json",
+		summary:
+			"Enumerate every discoverable flow (project, global, installed, PATH) with live availability",
 		effect: "FREE",
 		consent: "none",
 	},

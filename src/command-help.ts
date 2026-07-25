@@ -119,6 +119,20 @@ Examples:
   md roster sync --agents
   md roster sync --check --json`,
 
+	catalog: `Usage: md catalog [--json]
+
+Print every discoverable flow as one JSON object: project flows, every
+globally installed flow, and runnable Markdown flows found directly on
+PATH, each with its live availability. FREE and read-only — never invokes
+an engine, never writes. Output is always JSON (--json is accepted for
+symmetry with other machine-readable commands).
+
+Examples:
+  md catalog --json | jq -r '.flows[].id'
+  md catalog --json | jq '.flows[] | select(.available == false)'
+
+Related: md roster --json (project/global/registry flows/*.md only)`,
+
 	install: `Usage: md install <url|gh:org/repo/path/to/flow.md[@ref]> [--global]
 
 Install a flow into the registry. Project scope is the default; --global

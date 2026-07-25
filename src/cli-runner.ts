@@ -6,13 +6,14 @@
  * without spawning actual subprocesses or touching the real filesystem.
  */
 
-import { parseFrontmatter } from "./parse";
+import { parseFrontmatter, parseRawFrontmatter } from "./parse";
 import { parseCliArgs, handleMaCommands } from "./cli";
 import { subcommandHelpText, COMMAND_LIST_LINE } from "./command-help";
 import type {
 	AgentFrontmatter,
 	CommandDefaults,
 	FormInputs,
+	InputDefinition,
 	StructuredOutputConfig,
 } from "./types";
 import type { AdhocCommandResult } from "./adhoc-command";
@@ -21,9 +22,15 @@ import {
 	isLegacyInputs,
 	collectFormInputs,
 	getFormInputDefaults,
+	getInputVariableNames,
 	getMissingRequiredInputs,
 } from "./form-inputs";
-import { substituteTemplateVars, extractTemplateVars } from "./template";
+import {
+	substituteTemplateVars,
+	extractTemplateVars,
+	extractRequiredTemplateVars,
+	extractForeignTemplateGlobals,
+} from "./template";
 import {
 	resolveEngine,
 	type EngineSource,
@@ -33,6 +40,8 @@ import {
 	extractEnvVars,
 	killCurrentChildProcess,
 	hasInteractiveMarker,
+	filenameNamesEngine,
+	levenshteinDistance,
 } from "./command";
 import type { ParsedWorkflow, WorkflowResult } from "./workflow";
 import { getProcessManager } from "./process-manager";
@@ -54,9 +63,11 @@ import {
 	loadFullConfig,
 	applyDefaults,
 	applyInteractiveMode,
+	getDeclaredFlowDirectories,
 	isInteractiveModeEnabled,
 } from "./config";
 import { getAdapter as getEngineAdapter } from "./adapters";
+import { CODEX_ISOLATION_UNSET_ENV } from "./adapters/codex";
 import {
 	applyIsolationDefaults,
 	applyIsolationEnvironment,
@@ -132,8 +143,11 @@ async function cleanupRemoteFile(localFilePath: string): Promise<void> {
 	await cleanupRemote(localFilePath);
 }
 
-function isAdhocInvocationCandidate(argv: string[]): boolean {
-	return [argv[1], argv[0]].some((value) => {
+function isAdhocInvocationCandidate(
+	argv: string[],
+	invokedAs?: string,
+): boolean {
+	return [invokedAs, argv[1], argv[0]].some((value) => {
 		if (!value) return false;
 		const name = basename(value).replace(/\.(ts|js|mjs|cjs)$/, "");
 		return /^md(?:\.i)?\.[a-z][a-z0-9-]*$/i.test(name);
@@ -236,6 +250,88 @@ interface JsonModeState {
  * Interactive engines treat any positional prompt as a submitted first turn.
  * A blank interactive body therefore means no positional argument at all.
  */
+/**
+ * md's own underscore CLI flags, for did-you-mean hints when an ad-hoc
+ * `--_var` flag goes unused. `--_dry_run` is one edit away from
+ * `--_dry-run` — silently treating the typo as a template variable made md
+ * RUN a flow the user asked to preview.
+ */
+const MD_UNDERSCORE_FLAGS = [
+	"_allow-nested",
+	"_append-system-prompt",
+	"_command",
+	"_context",
+	"_cwd",
+	"_dry-run",
+	"_edit",
+	"_hooks",
+	"_interactive",
+	"_isolated",
+	"_no-cache",
+	"_no-evolve",
+	"_no-history",
+	"_no-menu",
+	"_quiet",
+	"_resume",
+	"_system-prompt",
+	"_trust",
+] as const;
+
+/**
+ * Warnings for CLI-provided template variables the flow never references.
+ * Pure (returns lines) so tests can pin the exact behavior.
+ */
+export function unusedCliVarWarnings(
+	adHocVars: Iterable<string>,
+	referencedVars: Iterable<string>,
+	inputNames: Iterable<string>,
+): string[] {
+	const referenced = new Set(referencedVars);
+	const declared = new Set(inputNames);
+	const warnings: string[] = [];
+	for (const key of adHocVars) {
+		if (referenced.has(key) || declared.has(key)) continue;
+		let best: { flag: string; distance: number } | undefined;
+		for (const flag of MD_UNDERSCORE_FLAGS) {
+			const distance = levenshteinDistance(key, flag);
+			if (!best || distance < best.distance) best = { flag, distance };
+		}
+		const hint =
+			best && best.distance <= 2 ? ` Did you mean --${best.flag}?` : "";
+		warnings.push(
+			`Warning [UNUSED_VARIABLE_FLAG]: --${key} was provided but this flow never uses {{ ${key} }} — it had no effect.${hint}`,
+		);
+	}
+	return warnings;
+}
+
+/**
+ * Actionable fail-fast error for missing template variables in a run that
+ * cannot prompt anywhere: name the exact flags to pass, and explain _stdin
+ * separately — it comes from piped input, not a flag.
+ */
+export function missingVariablesMessage(
+	filePath: string,
+	missingVars: string[],
+): string {
+	const fileLabel = basename(filePath);
+	const flagVars = missingVars.filter((v) => v !== "_stdin");
+	const lines = [`Missing template variables: ${missingVars.join(", ")}`];
+	if (flagVars.length > 0) {
+		const flags = flagVars.map((v) => `--${v} "<value>"`).join(" ");
+		lines.push(`Provide values as flags: md ${fileLabel} ${flags}`);
+	}
+	if (missingVars.includes("_stdin")) {
+		lines.push(
+			`{{ _stdin }} comes from piped input: <command> | md ${fileLabel}`,
+		);
+	}
+	lines.push(
+		"(In a terminal, md prompts for these instead of failing.)",
+	);
+	return lines.join("\n");
+}
+
 export function promptPositionals(
 	prompt: string,
 	interactive: boolean,
@@ -334,6 +430,14 @@ export class CliRunner {
 	private runCommandFn: typeof runCommand;
 	private handleMaCommandsFn: typeof handleMaCommands;
 	private jsonModeState: JsonModeState | null = null;
+	/**
+	 * Whether a run with non-TTY stdin may still prompt on /dev/tty (see
+	 * tty-prompt.ts). Enabled only for real invocations: any harness that
+	 * stubs stdin behavior (tests, embedders) opts out implicitly, and eval
+	 * children (MDFLOW_EVAL_RUN=1) and MDFLOW_NO_TTY_PROMPT=1 opt out at
+	 * prompt time so hermetic runs can never block on a hidden terminal.
+	 */
+	private allowTtyPromptFallback: boolean;
 
 	constructor(options: CliRunnerOptions) {
 		this.env = options.env;
@@ -359,6 +463,27 @@ export class CliRunner {
 			});
 		this.runCommandFn = options.runCommandFn ?? runCommand;
 		this.handleMaCommandsFn = options.handleMaCommandsFn ?? handleMaCommands;
+		this.allowTtyPromptFallback =
+			options.isStdinTTY === undefined &&
+			options.stdinContent === undefined &&
+			options.promptInputWithHistory === undefined;
+	}
+
+	/**
+	 * Open /dev/tty for prompting when stdin can't be used (piped, drained,
+	 * or attached to a parent process). Null when prompting would be wrong:
+	 * hermetic eval children, explicit opt-out, or no terminal anywhere —
+	 * a human must plausibly be watching (stdout or stderr is a TTY).
+	 */
+	private async openTtyFallback(): Promise<
+		import("./tty-prompt").TtyPromptChannel | null
+	> {
+		if (!this.allowTtyPromptFallback) return null;
+		if (this.processEnv.MDFLOW_EVAL_RUN === "1") return null;
+		if (this.processEnv.MDFLOW_NO_TTY_PROMPT) return null;
+		if (!this.isStdoutTTY && !process.stderr.isTTY) return null;
+		const { openTtyPromptChannel } = await import("./tty-prompt");
+		return openTtyPromptChannel();
 	}
 
 	private async readStdin(): Promise<string> {
@@ -424,8 +549,12 @@ export class CliRunner {
 	 * 1. As-is (absolute path or relative to cwd)
 	 * 2. Project flow roster: ./flows/<filename>
 	 * 3. Legacy project agents: ./.mdflow/<filename>
-	 * 4. User agents: ~/.mdflow/<filename>
-	 * 5. PATH directories (for files without path separators)
+	 *    3b. Project registry installs: ./.mdflow/registry/<filename>
+	 * 4. User flows: ~/.mdflow/flows/<filename>
+	 *    4b. User registry installs: ~/.mdflow/registry/<filename>
+	 * 5. Config-declared roster directories (flows.directories)
+	 * 6. Legacy user agents: ~/.mdflow/<filename>
+	 * 7. PATH directories (for files without path separators)
 	 *
 	 * Simple flow names may omit the .md extension (`md review`).
 	 */
@@ -467,7 +596,63 @@ export class CliRunner {
 				}
 			}
 
-			// 4. Try ~/.mdflow/
+			// 3b. Registry installs at the project scope. `md install` puts
+			// flows here and `md list`/the roster surface them — chaos round 4
+			// found them unreachable by name (the runner never looked).
+			// Registry provenance (remote hooks trust) is enforced downstream
+			// via isRegistryFlowPath, not by hiding the file.
+			for (const candidate of candidateNames) {
+				const projectRegistryPath = join(
+					projectRoot,
+					".mdflow",
+					"registry",
+					candidate,
+				);
+				if (await this.env.fs.exists(projectRegistryPath)) {
+					return projectRegistryPath;
+				}
+			}
+
+			// 4. Try the canonical user roster: ~/.mdflow/flows/
+			for (const candidate of candidateNames) {
+				const userFlowsPath = join(homedir(), ".mdflow", "flows", candidate);
+				if (await this.env.fs.exists(userFlowsPath)) {
+					return userFlowsPath;
+				}
+			}
+
+			// 4b. Registry installs at the user scope.
+			for (const candidate of candidateNames) {
+				const userRegistryPath = join(
+					homedir(),
+					".mdflow",
+					"registry",
+					candidate,
+				);
+				if (await this.env.fs.exists(userRegistryPath)) {
+					return userRegistryPath;
+				}
+			}
+
+			// 5. Try config-declared roster directories
+			try {
+				const declared = await getDeclaredFlowDirectories({
+					cwd: this.configCwd(),
+				});
+				for (const dir of [...declared.project, ...declared.global]) {
+					for (const candidate of candidateNames) {
+						const declaredPath = join(dir, candidate);
+						if (await this.env.fs.exists(declaredPath)) {
+							return declaredPath;
+						}
+					}
+				}
+			} catch {
+				// Declared directories are best-effort for name resolution; a
+				// broken config is reported by the main config load path.
+			}
+
+			// 6. Try the legacy user directory: ~/.mdflow/
 			for (const candidate of candidateNames) {
 				const userPath = join(homedir(), ".mdflow", candidate);
 				if (await this.env.fs.exists(userPath)) {
@@ -475,7 +660,7 @@ export class CliRunner {
 				}
 			}
 
-			// 5. Try $PATH directories
+			// 7. Try $PATH directories
 			// Use path.delimiter for cross-platform support (: on Unix, ; on Windows)
 			const pathDirs = (this.processEnv.PATH || "").split(delimiter);
 			for (const dir of pathDirs) {
@@ -513,6 +698,29 @@ export class CliRunner {
 		}
 
 		return { scope, positional };
+	}
+
+	/**
+	 * Reject unknown flags on registry subcommands (install/remove/list).
+	 * Their only valid positionals are URLs and flow names, which never begin
+	 * with "-", so a dash-prefixed positional is a typo'd/unknown flag — e.g.
+	 * `md remove --gobal name` used to silently remove from the wrong scope
+	 * (chaos round 6). Only `--json` is allowed alongside (handled elsewhere).
+	 */
+	private assertNoUnknownRegistryFlags(
+		subcommand: string,
+		positional: string[],
+	): void {
+		const unknown = positional.find(
+			(arg) => arg.startsWith("-") && arg !== "--json",
+		);
+		if (unknown) {
+			throw new ConfigurationError(
+				`Unknown ${subcommand} option: ${unknown}. ` +
+					`Valid flags: --global (-g) / --project (-p). Run 'md ${subcommand} --help'.`,
+				1,
+			);
+		}
 	}
 
 	private resetJsonModeState(): void {
@@ -727,6 +935,7 @@ export class CliRunner {
 				"roster",
 				"explain",
 				"render",
+				"catalog",
 			].includes(subcommand);
 		let logPath: string | null = null;
 		// Structured lifecycle commands own their JSON schema. Letting the generic
@@ -852,10 +1061,13 @@ export class CliRunner {
 		argv: string[],
 		setLogPath: (lp: string | null) => void,
 	): Promise<CliRunResult> {
-		// Check for ad-hoc command invocation (md.claude, md.gemini, etc.)
-		if (isAdhocInvocationCandidate(argv)) {
+		// Check for ad-hoc command invocation (md.claude, md.gemini, etc.).
+		// The node launcher erases the invoked name from argv; it forwards
+		// the original executable basename via MDFLOW_INVOKED_AS.
+		const invokedAs = this.processEnv.MDFLOW_INVOKED_AS;
+		if (isAdhocInvocationCandidate(argv, invokedAs)) {
 			const { detectAdhocCommand } = await import("./adhoc-command");
-			const adhocResult = detectAdhocCommand(argv);
+			const adhocResult = detectAdhocCommand(argv, invokedAs);
 			if (adhocResult.isAdhoc) {
 				return this.runAdhocCommand(adhocResult, setLogPath);
 			}
@@ -933,6 +1145,7 @@ export class CliRunner {
 			return { exitCode: 0 };
 		}
 		if (subcommand === "install") {
+			this.assertNoUnknownRegistryFlags("install", registryArgs.positional);
 			const { installAgent } = await import("./registry");
 			const spec = registryArgs.positional[0];
 			if (!spec) {
@@ -957,6 +1170,7 @@ export class CliRunner {
 			return { exitCode: 0 };
 		}
 		if (subcommand === "remove") {
+			this.assertNoUnknownRegistryFlags("remove", registryArgs.positional);
 			const { removeAgent } = await import("./registry");
 			const name = registryArgs.positional[0];
 			if (!name) {
@@ -977,6 +1191,7 @@ export class CliRunner {
 			return { exitCode: 0 };
 		}
 		if (subcommand === "list") {
+			this.assertNoUnknownRegistryFlags("list", registryArgs.positional);
 			const { listAgents } = await import("./registry");
 			const agents = await listAgents({
 				scope: registryArgs.scope,
@@ -1027,6 +1242,10 @@ export class CliRunner {
 		if (subcommand === "roster") {
 			const { runRoster } = await import("./roster");
 			return { exitCode: await runRoster(cliArgs.passthroughArgs, this.cwd) };
+		}
+		if (subcommand === "catalog") {
+			const { runCatalog } = await import("./catalog");
+			return { exitCode: await runCatalog(cliArgs.passthroughArgs, this.cwd) };
 		}
 		if (subcommand === "eval") {
 			const { runEvalCommand } = await import("./evals-cli");
@@ -1223,6 +1442,9 @@ export class CliRunner {
 			args,
 			positionalMappings,
 			interactiveMode,
+			isolated,
+			commandCwd,
+			flowPath,
 		} = await this.processAgent(
 			virtualFilename,
 			baseFrontmatter,
@@ -1332,6 +1554,9 @@ export class CliRunner {
 				interactive: interactiveMode,
 				env: extractEnvVars(frontmatter),
 				rawOutput: parsed.rawOutput,
+				isolated,
+				flowPath,
+				cwd: commandCwd,
 			},
 			parsed.jsonMode,
 		);
@@ -1513,6 +1738,9 @@ export class CliRunner {
 			args,
 			positionalMappings,
 			interactiveMode,
+			isolated,
+			commandCwd,
+			flowPath,
 		} = await this.processAgent(
 			localFilePath,
 			baseFrontmatter,
@@ -1590,7 +1818,16 @@ export class CliRunner {
 				captureOutput: captureMode,
 				resume: parsed.resume,
 				cacheDir: join(cacheBaseDir, ".mdflow", ".cache"),
-				runCommandFn: (ctx) => this.executeCommand(ctx, parsed.jsonMode),
+				runCommandFn: (ctx) =>
+					this.executeCommand(
+						{
+							...ctx,
+							isolated,
+							flowPath,
+							cwd: ctx.cwd ?? commandCwd,
+						},
+						parsed.jsonMode,
+					),
 			});
 			const workflowDurationMs = Date.now() - workflowStartedAt;
 
@@ -1870,6 +2107,9 @@ export class CliRunner {
 					env: extractEnvVars(frontmatter),
 					rawOutput: parsed.rawOutput,
 					allowNested: parsed.allowNested,
+					isolated,
+					flowPath,
+					cwd: commandCwd,
 				},
 				parsed.jsonMode,
 			);
@@ -2200,6 +2440,9 @@ export class CliRunner {
 				finalBody,
 				args,
 				positionalMappings,
+				isolated,
+				commandCwd,
+				flowPath,
 			} = await this.processAgent(
 				localFilePath,
 				baseFrontmatter,
@@ -2313,6 +2556,9 @@ export class CliRunner {
 							...ctx,
 							captureOutput: "stream",
 							onOutput: emitDelta,
+							isolated,
+							flowPath,
+							cwd: ctx.cwd ?? commandCwd,
 						}),
 				});
 
@@ -2358,6 +2604,9 @@ export class CliRunner {
 					});
 				},
 				onOutput: emitDelta,
+				isolated,
+				flowPath,
+				cwd: commandCwd,
 			});
 
 			const durationMs = Date.now() - startedAt;
@@ -2584,24 +2833,47 @@ export class CliRunner {
 		let hooksFromCli: string | undefined;
 		const appendSystemPromptFromCli: string[] = [];
 
+		// Extract EVERY value-taking flag robustly (chaos round 6): support
+		// both `--flag value` and `--flag=value`, remove ALL occurrences (a
+		// duplicate used to leak the second into the engine's own argv), and
+		// error on a missing/flag-like value instead of leaking the bare flag.
+		// Returns the collected values in order (first-wins is the caller's job).
+		const takeValueFlag = (
+			aliases: string[],
+			label: string,
+			example: string,
+		): string[] => {
+			const values: string[] = [];
+			for (let i = remainingArgs.length - 1; i >= 0; i--) {
+				const arg = remainingArgs[i]!;
+				const eqAlias = aliases.find((a) => arg.startsWith(`${a}=`));
+				if (eqAlias) {
+					values.unshift(arg.slice(eqAlias.length + 1));
+					remainingArgs.splice(i, 1);
+					continue;
+				}
+				if (aliases.includes(arg)) {
+					const value = remainingArgs[i + 1];
+					if (value === undefined || value.startsWith("-")) {
+						throw new ConfigurationError(
+							`${label} requires a value (e.g. ${example}). ` +
+								`Got ${value === undefined ? "no value" : `"${value}"`}.`,
+							1,
+						);
+					}
+					values.unshift(value);
+					remainingArgs.splice(i, 2);
+				}
+			}
+			return values;
+		};
 		// --engine is the v3 flag; --_command/-_c and --tool are deprecated aliases.
-		const engineIdx = remainingArgs.findIndex((a) => a === "--engine");
-		if (engineIdx !== -1 && engineIdx + 1 < remainingArgs.length) {
-			commandFromCli = remainingArgs[engineIdx + 1];
-			remainingArgs.splice(engineIdx, 2);
-		}
-		const cmdIdx = remainingArgs.findIndex(
-			(a) => a === "--_command" || a === "-_c",
-		);
-		if (cmdIdx !== -1 && cmdIdx + 1 < remainingArgs.length) {
-			if (!commandFromCli) commandFromCli = remainingArgs[cmdIdx + 1];
-			remainingArgs.splice(cmdIdx, 2);
-		}
-		const toolIdx = remainingArgs.findIndex((a) => a === "--tool");
-		if (toolIdx !== -1 && toolIdx + 1 < remainingArgs.length) {
-			if (!commandFromCli) commandFromCli = remainingArgs[toolIdx + 1];
-			remainingArgs.splice(toolIdx, 2);
-		}
+		const engineValues = [
+			...takeValueFlag(["--engine"], "--engine", "--engine claude"),
+			...takeValueFlag(["--_command", "-_c"], "--_command", "--_command claude"),
+			...takeValueFlag(["--tool"], "--tool", "--tool claude"),
+		];
+		if (engineValues.length > 0) commandFromCli = engineValues[0];
 		dryRun = remainingArgs.some(
 			(arg) => arg === "--_dry-run" || arg === "--dry-run",
 		);
@@ -2638,10 +2910,11 @@ export class CliRunner {
 			allowNested = true;
 			remainingArgs.splice(allowNestedIdx, 1);
 		}
-		const jsonIdx = remainingArgs.indexOf("--json");
-		if (jsonIdx !== -1) {
+		// Strip EVERY --json, not just the first: a duplicate used to leak the
+		// second occurrence into the engine's argv (chaos round 6).
+		if (remainingArgs.includes("--json")) {
 			jsonMode = true;
-			remainingArgs.splice(jsonIdx, 1);
+			remainingArgs = remainingArgs.filter((a) => a !== "--json");
 		}
 		// --_no-history flag: skip loading/saving variable history
 		const noHistoryIdx = remainingArgs.indexOf("--_no-history");
@@ -2668,11 +2941,8 @@ export class CliRunner {
 			interactiveFromCli = true;
 			remainingArgs.splice(intIdx, 1);
 		}
-		const cwdIdx = remainingArgs.findIndex((a) => a === "--_cwd");
-		if (cwdIdx !== -1 && cwdIdx + 1 < remainingArgs.length) {
-			cwdFromCli = remainingArgs[cwdIdx + 1];
-			remainingArgs.splice(cwdIdx, 2);
-		}
+		const cwdValues = takeValueFlag(["--_cwd"], "--_cwd", "--_cwd ./src");
+		if (cwdValues.length > 0) cwdFromCli = cwdValues[0];
 		// --raw flag: output raw markdown without rendering (for piping)
 		const rawIdx = remainingArgs.indexOf("--raw");
 		if (rawIdx !== -1) {
@@ -2705,26 +2975,27 @@ export class CliRunner {
 				remainingArgs.splice(isolatedIdx, 1);
 			}
 		}
-		const sysPromptIdx = remainingArgs.indexOf("--_system-prompt");
-		if (sysPromptIdx !== -1 && sysPromptIdx + 1 < remainingArgs.length) {
-			systemPromptFromCli = remainingArgs[sysPromptIdx + 1];
-			remainingArgs.splice(sysPromptIdx, 2);
-		}
-		// --_append-system-prompt is repeatable
-		let appendIdx: number;
-		while (
-			(appendIdx = remainingArgs.indexOf("--_append-system-prompt")) !== -1 &&
-			appendIdx + 1 < remainingArgs.length
-		) {
-			appendSystemPromptFromCli.push(remainingArgs[appendIdx + 1]!);
-			remainingArgs.splice(appendIdx, 2);
-		}
+		const sysPromptValues = takeValueFlag(
+			["--_system-prompt"],
+			"--_system-prompt",
+			'--_system-prompt "be brief"',
+		);
+		if (sysPromptValues.length > 0) systemPromptFromCli = sysPromptValues[0];
+		// --_append-system-prompt is repeatable — keep every value, in order.
+		appendSystemPromptFromCli.push(
+			...takeValueFlag(
+				["--_append-system-prompt"],
+				"--_append-system-prompt",
+				'--_append-system-prompt "cite sources"',
+			),
+		);
 		// --_hooks <path|false> — override or disable the flow's hooks file.
-		const hooksIdx = remainingArgs.indexOf("--_hooks");
-		if (hooksIdx !== -1 && hooksIdx + 1 < remainingArgs.length) {
-			hooksFromCli = remainingArgs[hooksIdx + 1];
-			remainingArgs.splice(hooksIdx, 2);
-		}
+		const hooksValues = takeValueFlag(
+			["--_hooks"],
+			"--_hooks",
+			"--_hooks ./my.hooks.ts (or --_hooks false)",
+		);
+		if (hooksValues.length > 0) hooksFromCli = hooksValues[0];
 
 		return {
 			remainingArgs,
@@ -2783,6 +3054,10 @@ export class CliRunner {
 				baseFrontmatter as AgentFrontmatter,
 				{
 					configEngine: fullConfig.engine,
+					// Honor the injected environment (testable; production
+					// passes the real process.env) so MDFLOW_ENGINE resolves
+					// consistently with the document-rule check above.
+					env: this.processEnv,
 				},
 			);
 			command = resolved.engine;
@@ -2806,15 +3081,28 @@ export class CliRunner {
 
 		// A markdown file with no frontmatter and no explicit engine is a
 		// document, not a flow — print it instead of executing it. Frontmatter
-		// (or a filename/flag engine) is what marks a file as executable.
+		// (or a filename/flag engine, or the `.i.` interactive marker) is what
+		// marks a file as executable.
 		// Compat-only keys (_mdflow_version/_compat) are invisible metadata and
 		// don't count: automatic version stamping must never flip a document
 		// into an executable flow.
 		if (
 			engineIsImplicit &&
+			!hasInteractiveMarker(localFilePath) &&
+			// A filename engine (task.echo.md) is an execution intent, so the
+			// file is a flow even when env/config overrides which engine runs.
+			// Without this, `MDFLOW_ENGINE=claude md task.echo.md` PRINTED the
+			// file instead of running it on claude (chaos round 6).
+			!filenameNamesEngine(localFilePath) &&
 			isCompatOnlyFrontmatter(baseFrontmatter as Record<string, unknown>)
 		) {
-			this.writeStdout(await this.env.fs.readText(localFilePath));
+			// Print the document WITHOUT its (empty or compat-only) frontmatter
+			// fences — they are flow plumbing, not document content.
+			const documentText = await this.env.fs.readText(localFilePath);
+			const { body: documentBody } = parseRawFrontmatter(documentText);
+			this.writeStdout(
+				documentBody.trim() === "" ? documentText : documentBody,
+			);
 			throw new EarlyExitRequest();
 		}
 
@@ -2896,16 +3184,24 @@ export class CliRunner {
 			command,
 			interactiveFromFilename || interactiveFromCli,
 		);
+		const commandCwd = resolve(
+			cwdFromCli ?? (frontmatter._cwd as string | undefined) ?? this.cwd,
+		);
+		let isolationOwnedHookArgs: string[] = [];
 
 		// Some engines require an environment boundary in addition to CLI flags.
 		// Codex is the important case: --ignore-user-config is exec-only and does
 		// not suppress hooks.json anyway, so every isolated run (including a
 		// hookless interactive flow) must use the prepared, ambient-hook-free home.
-		if (isolationMode.isolated && engineAdapter.prepareIsolationEnv) {
+		if (
+			parsed.dryRun &&
+			isolationMode.isolated &&
+			engineAdapter.prepareIsolationEnv
+		) {
 			frontmatter = applyIsolationEnvironment(
 				frontmatter,
 				engineAdapter,
-				!parsed.dryRun,
+				{ cwd: commandCwd, interactive: interactiveMode },
 			);
 		}
 
@@ -2992,6 +3288,7 @@ export class CliRunner {
 					},
 				);
 				frontmatter = appliedHooks.frontmatter;
+				isolationOwnedHookArgs = appliedHooks.isolationOwnedArgs;
 				if (!parsed.quiet && !jsonMode) {
 					const dim = process.stderr.isTTY ? ["\x1b[2m", "\x1b[0m"] : ["", ""];
 					this.writeStderr(
@@ -3012,6 +3309,17 @@ export class CliRunner {
 		const envVars = extractEnvVars(frontmatter);
 		if (envVars)
 			Object.entries(envVars).forEach(([k, v]) => {
+				if (
+					isolationMode.isolated &&
+					command === "codex" &&
+					(k === "CODEX_HOME" ||
+						k === "HOME" ||
+						CODEX_ISOLATION_UNSET_ENV.includes(
+							k as (typeof CODEX_ISOLATION_UNSET_ENV)[number],
+						))
+				) {
+					return;
+				}
 				this.processEnv[k] = v;
 			});
 
@@ -3037,24 +3345,44 @@ export class CliRunner {
 		);
 		for (const key of namedVarFields) {
 			const defaultValue = frontmatter[key];
-			// CLI flag matches the full key including underscore: --_name
+			// CLI flag matches the full key including underscore: --_name.
+			// Support both `--_name value` and `--_name=value`.
 			const flag = `--${key}`;
+			const eqIdx = remaining.findIndex((a) => a.startsWith(`${flag}=`));
+			if (eqIdx !== -1) {
+				templateVars[key] = remaining[eqIdx]!.slice(flag.length + 1);
+				remaining.splice(eqIdx, 1);
+				continue;
+			}
 			const idx = remaining.findIndex((a) => a === flag);
+			const next = idx !== -1 ? remaining[idx + 1] : undefined;
+			// Only consume the following token as the value when it isn't
+			// itself a flag — otherwise `--_name --engine claude` would eat
+			// `--engine` as the name and silently drop engine selection
+			// (chaos round 6). A flag-like value must use --_name=-x.
 			const flagValue =
-				idx !== -1 && idx + 1 < remaining.length
-					? remaining[idx + 1]
-					: undefined;
+				next !== undefined && !next.startsWith("-") ? next : undefined;
 			if (flagValue !== undefined) {
 				templateVars[key] = flagValue;
 				remaining.splice(idx, 2);
-			} else if (defaultValue != null && defaultValue !== "") {
-				templateVars[key] = String(defaultValue);
+			} else {
+				// This flag belongs to a DECLARED var: consume the bare token
+				// (if present) so the ad-hoc loop below can't re-interpret it
+				// as a boolean "true" and clobber the declared default.
+				if (idx !== -1) remaining.splice(idx, 1);
+				if (defaultValue != null && defaultValue !== "") {
+					templateVars[key] = String(defaultValue);
+				}
 			}
 		}
 
 		// Also extract any --_varname CLI flags not declared in frontmatter
 		// This allows optional template vars without frontmatter declaration
 		// Supports both --_key value and --_key=value syntax
+		// Tracked so a var the body never references can be warned about — a
+		// typo like --_dry_run (for --_dry-run) otherwise silently RUNS the
+		// flow the user asked to preview.
+		const adHocCliVars = new Set<string>();
 		for (let i = remaining.length - 1; i >= 0; i--) {
 			const arg = remaining[i];
 			if (!arg) continue;
@@ -3064,6 +3392,7 @@ export class CliRunner {
 				const key = arg.slice(2, eqIndex); // Remove -- and get key before =
 				if (!internalKeys.has(key)) {
 					templateVars[key] = arg.slice(eqIndex + 1);
+					adHocCliVars.add(key);
 					remaining.splice(i, 1);
 				}
 			} else if (arg.startsWith("--_") && !internalKeys.has(arg.slice(2))) {
@@ -3077,6 +3406,7 @@ export class CliRunner {
 					templateVars[key] = "true";
 					remaining.splice(i, 1);
 				}
+				adHocCliVars.add(key);
 			}
 		}
 
@@ -3112,6 +3442,19 @@ export class CliRunner {
 				.map((arg, i) => `${i + 1}. ${arg}`)
 				.join("\n");
 		}
+
+		// Legacy `_inputs: [_message]` — named positional arguments consumed
+		// from the CLI in declaration order. CLI flags (--_message) win over
+		// the positional occupying the same slot.
+		if (isLegacyInputs(frontmatter._inputs)) {
+			const legacyNames = frontmatter._inputs;
+			for (let i = 0; i < legacyNames.length; i++) {
+				const name = legacyNames[i];
+				if (!name || name in templateVars) continue;
+				const value = positionalCliArgs[i];
+				if (value !== undefined) templateVars[name] = value;
+			}
+		}
 		// Update remaining to only contain flag args (positionals consumed for templates)
 		remaining = flagArgs;
 
@@ -3121,9 +3464,6 @@ export class CliRunner {
 		// Phase 3: Expand command imports with resolved template vars
 
 		const fileDir = dirname(resolve(localFilePath));
-		const commandCwd =
-			cwdFromCli ?? (frontmatter._cwd as string | undefined) ?? this.cwd;
-
 		// Phase 1: Expand content imports only
 		let phase1Body = rawBody;
 		if (hasContentImports(rawBody)) {
@@ -3178,23 +3518,108 @@ export class CliRunner {
 					templateVars,
 				);
 				if (missingRequired.length > 0) {
-					throw new TemplateError(
-						`Missing required form inputs: ${missingRequired.join(", ")}. Provide values via CLI flags (e.g., --${missingRequired[0]} value)`,
-					);
+					// Same /dev/tty fallback as plain template variables: a piped
+					// run with a human at the terminal gets asked, not failed.
+					const tty = jsonMode ? null : await this.openTtyFallback();
+					if (tty) {
+						try {
+							tty.note("Missing required inputs. Please provide values:");
+							for (const name of missingRequired) {
+								const definition = (
+									formInputs as Record<string, InputDefinition | undefined>
+								)[name];
+								const message = definition?.description || `${name}:`;
+								const fallbackDefault =
+									definition?.default !== undefined
+										? String(definition.default)
+										: undefined;
+								templateVars[name] = tty.prompt(message, fallbackDefault);
+							}
+						} finally {
+							tty.close();
+						}
+					} else {
+						throw new TemplateError(
+							`Missing required form inputs: ${missingRequired.join(", ")}. Provide values via CLI flags (e.g., --${missingRequired[0]} value)`,
+						);
+					}
 				}
 			}
 		}
 
 		// Check for missing template vars (based on Phase 1 result)
 		// This handles both legacy _inputs and template vars not defined in form inputs
-		const requiredVars = extractTemplateVars(phase1Body);
+		// referencedVars: every var the flow mentions anywhere (body outputs,
+		// control flow, and frontmatter values like _env strings) — used to
+		// suppress "unused flag" warnings. requiredVars: the subset that must
+		// have a value ({{ _v | default: … }} occurrences are optional).
+		const referencedVars = [
+			...new Set([
+				...extractTemplateVars(phase1Body),
+				...extractTemplateVars(JSON.stringify(frontmatter)),
+			]),
+		];
+		// Workflow steps carry their own prompt templates in `run:` — a var
+		// referenced only there must still be collected up front, or the step
+		// renders it as empty with no prompt and no error.
+		const stepTemplateText = Array.isArray(frontmatter._steps)
+			? frontmatter._steps
+					.map((step) =>
+						step && typeof step === "object" && "run" in step
+							? String((step as { run?: unknown }).run ?? "")
+							: "",
+					)
+					.join("\n")
+			: "";
+		const requiredVars = [
+			...new Set([
+				...extractRequiredTemplateVars(phase1Body),
+				...extractRequiredTemplateVars(stepTemplateText),
+			]),
+		];
+
+		// Surface ad-hoc --_var flags the flow never references — silently
+		// accepting them turns flag typos into full (possibly paid) runs.
+		if (!parsed.quiet && !jsonMode) {
+			for (const warning of unusedCliVarWarnings(
+				adHocCliVars,
+				referencedVars,
+				getInputVariableNames(frontmatter._inputs),
+			)) {
+				this.writeStderr(warning);
+			}
+			// Same for positionals: `md flow.md one two` where the flow never
+			// reads {{ _1 }}/{{ _args }} silently discarded the arguments.
+			if (
+				positionalCliArgs.length > 0 &&
+				!isLegacyInputs(frontmatter._inputs) &&
+				!referencedVars.includes("_args") &&
+				!positionalCliArgs.some((_, i) => referencedVars.includes(`_${i + 1}`))
+			) {
+				this.writeStderr(
+					`Warning [UNUSED_POSITIONAL_ARGS]: ${positionalCliArgs.length} positional ` +
+						`argument${positionalCliArgs.length === 1 ? "" : "s"} provided, but this flow ` +
+						`never uses {{ _1 }} or {{ _args }} — they had no effect.`,
+				);
+			}
+			// And for the body itself: {{ place }} (no underscore) is not an
+			// mdflow variable — Liquid renders it as an EMPTY string with no
+			// error, so "Hello {{place}}!" silently became "Hello !".
+			for (const name of extractForeignTemplateGlobals(phase1Body)) {
+				this.writeStderr(
+					`Warning [UNRESOLVED_TEMPLATE_VAR]: {{ ${name} }} has no value and renders ` +
+						`as empty — mdflow variables use an underscore prefix ` +
+						`({{ _${name} }}, provided via --_${name}).`,
+				);
+			}
+		}
 
 		// Inject stdin as _stdin only when the expanded template references it.
 		// Draining an unreferenced stdin can block forever on a never-closing
 		// descriptor (hooks, cron, detached agents). Non-empty input becomes
 		// {{ _stdin }}; empty input falls through to the normal missing-variable
 		// flow (TTY prompt or TemplateError), same as before.
-		if (requiredVars.includes("_stdin") && !("_stdin" in templateVars)) {
+		if (referencedVars.includes("_stdin") && !("_stdin" in templateVars)) {
 			const stdinContent = await readStdin();
 			if (stdinContent) {
 				templateVars["_stdin"] = stdinContent;
@@ -3227,9 +3652,26 @@ export class CliRunner {
 					promptedVars[v] = value;
 				}
 			} else {
-				throw new TemplateError(
-					`Missing template variables: ${missingVars.join(", ")}. Use '_inputs:' in frontmatter to map CLI arguments to variables`,
-				);
+				// stdin is piped or drained, but a human may still be at the
+				// terminal (`md flow.md | tee`, wrappers that consumed stdin) —
+				// ask on /dev/tty before giving up with an error.
+				const tty = jsonMode ? null : await this.openTtyFallback();
+				if (tty) {
+					try {
+						tty.note("Missing required variables. Please provide values:");
+						for (const v of missingVars) {
+							const value = tty.prompt(`${v}:`, variableHistory[v]);
+							templateVars[v] = value;
+							promptedVars[v] = value;
+						}
+					} finally {
+						tty.close();
+					}
+				} else {
+					throw new TemplateError(
+						missingVariablesMessage(localFilePath, missingVars),
+					);
+				}
 			}
 		}
 
@@ -3280,11 +3722,55 @@ export class CliRunner {
 
 		const finalBody = phase3Body;
 
+		// An interactive engine UI cannot run without a terminal — spawning
+		// it headless produces a confusing engine-side failure (or a hung
+		// TUI) after the launch. Fail fast with the remedy instead.
+		// MDFLOW_ASSUME_TTY=1 is the explicit override for wrappers (and
+		// harness tests) that guarantee a terminal mdflow cannot detect.
+		if (
+			interactiveMode &&
+			!parsed.dryRun &&
+			!this.isStdinTTY &&
+			this.processEnv.MDFLOW_ASSUME_TTY !== "1"
+		) {
+			throw new ConfigurationError(
+				"Interactive flow requires a terminal (INTERACTIVE_NEEDS_TTY): stdin " +
+					"is not a TTY, so the engine's UI cannot run here. Run from a " +
+					"terminal, or drop _interactive / the .i. marker for a print-mode run.",
+				1,
+			);
+		}
+
+		// An empty resolved prompt in print mode still spawns the engine,
+		// which then fails its own way (copilot: "No prompt provided") AFTER
+		// the launch cost — or worse, produces a junk run. Interactive mode
+		// legitimately opens the engine's UI without submitting anything, and
+		// `_steps` workflows carry per-step prompts instead of a body.
+		if (
+			!interactiveMode &&
+			!parsed.dryRun &&
+			!frontmatter._steps &&
+			finalBody.trim() === ""
+		) {
+			throw new ConfigurationError(
+				"The resolved prompt is empty (EMPTY_PROMPT): the flow body is blank " +
+					"after template and import expansion. Add body content, or run " +
+					"interactively (--_interactive) to open the engine's UI instead.",
+				1,
+			);
+		}
+
 		const templateVarSet = new Set(Object.keys(templateVars));
-		const args = [
+		let args = [
 			...buildArgs(frontmatter, templateVarSet, command),
 			...remaining,
 		];
+		if (isolationMode.isolated && engineAdapter.finalizeIsolationArgs) {
+			args = engineAdapter.finalizeIsolationArgs(args, {
+				interactive: interactiveMode,
+				ownedHookArgs: isolationOwnedHookArgs,
+			});
+		}
 		const positionalMappings = extractPositionalMappings(frontmatter);
 
 		return {
@@ -3295,6 +3781,15 @@ export class CliRunner {
 			args,
 			positionalMappings,
 			interactiveMode,
+			isolated: isolationMode.isolated,
+			// In-memory test environments may use virtual paths that cannot be
+			// handed to the real OS spawn API. Real flow cwd values exist and
+			// are propagated; virtual-only paths retain Bun.spawn's default.
+			commandCwd: existsSync(commandCwd) ? commandCwd : undefined,
+			// Lets the isolation layer tell a flow that belongs to this project
+			// from one merely standing in it. Remote flows keep their own
+			// provenance via the registry path check.
+			flowPath: resolve(localFilePath),
 		};
 	}
 

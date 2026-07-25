@@ -221,11 +221,13 @@ describe("ledger split (H3)", () => {
 });
 
 describe("lock hardening (H4)", () => {
-  test("a fresh zero-byte lock is busy, not stale", () => {
+  test("a fresh zero-byte lock is busy, not stale (surfaced after the wait window)", () => {
     const target = join(tempDir, "state.json");
     const fd = openSync(`${target}.lock`, "wx");
     closeSync(fd);
-    expect(() => withAtomicFileLock(target, () => 1, 60_000)).toThrow(/busy/);
+    // Short contention window so the busy assertion stays fast; a fresh lock
+    // is never taken over, so this still throws.
+    expect(() => withAtomicFileLock(target, () => 1, 60_000, 50)).toThrow(/busy/);
   });
 
   test("an old zero-byte lock is stale and can be taken over", () => {

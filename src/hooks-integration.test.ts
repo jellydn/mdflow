@@ -240,21 +240,24 @@ describe("consent boundaries (audit regressions)", () => {
     expect(result.stderr).toContain("require isolation");
   });
 
-  it("real runs get a prepared CODEX_HOME (no ambient hooks can ride the bypass)", async () => {
+  it("hook translation is pure; the spawn boundary owns CODEX_HOME", async () => {
     const flow = writeFlow();
     writeHooks(["stop"]);
-    // Dry-run output shows argv, not env; assert via the unit-level contract
-    // instead: the codex adapter returns CODEX_HOME pointing at the prepared
-    // home for isolated hooked runs.
     const { codexAdapter } = await import("./adapters/codex");
     const translation = codexAdapter.applyHooks!({
       hooksFile: join(dir, "task.codex.hooks.ts"),
       events: ["stop"],
       isolated: true,
     });
-    expect(translation.env?.CODEX_HOME).toBeDefined();
-    expect(translation.env!.CODEX_HOME).toContain("codex-hooks-home");
-    expect(existsSync(join(translation.env!.CODEX_HOME!, "hooks.json"))).toBe(false);
+    expect(translation.env).toBeUndefined();
+    const preview = codexAdapter.prepareIsolationEnv!({
+      mode: "preview",
+      cwd: dir,
+      interactive: true,
+    });
+    expect(preview?.env.CODEX_HOME).toContain(
+      "/.mdflow/runtime/codex/run-<fresh-per-process>",
+    );
     void flow;
   });
 });

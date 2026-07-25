@@ -9,8 +9,9 @@
  *   pi       --system-prompt / --append-system-prompt (repeatable)
  *   codex    -c model_instructions_file=<file> / -c developer_instructions=…
  *   gemini   GEMINI_SYSTEM_MD=<file> env var (replace only — no append)
+ *   grok     --system-prompt-override <replace> / --rules <append>
  *
- * copilot, droid, opencode, cursor-agent, and agy have no supported
+ * copilot, droid, opencode, cursor-agent, agy, and kimi have no supported
  * mechanism. That is a hard error, not a warning: a flow that declares its
  * system prompt and runs without it is a different flow.
  */

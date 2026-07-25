@@ -322,6 +322,33 @@ export async function runHooksCli(
     );
     return 1;
   }
+
+  // A hooks file with an empty handlers map BLOCKS every run of the flow
+  // (the run path refuses a hooks file that declares no events). Never write
+  // that trap state: removing the last handler means deleting the file.
+  const before = listHandledEventsStatic(hooksPath);
+  const emptiesFile = before.ok && removed.length >= before.events.length;
+  if (emptiesFile) {
+    let confirmed = yes;
+    if (!confirmed && isTTY) {
+      confirmed = await (runtime.promptConfirm ?? defaultPromptConfirm)(
+        `Removing ${removed.join(", ")} leaves no handlers, and an empty hooks ` +
+          `file blocks every run of this flow. Delete ${basename(hooksPath)}?`
+      );
+    }
+    if (!confirmed) {
+      error(
+        `md hooks remove: removing the last handler (${removed.join(", ")}) would leave a ` +
+          `hooks file with no events, which blocks every run of this flow. ` +
+          `Nothing was changed. Delete the file instead: md hooks remove ${flowArg} --yes`
+      );
+      return 1;
+    }
+    unlinkSync(hooksPath);
+    log(`Removed ${removed.join(", ")} — no handlers remained, deleted ${hooksPath}`);
+    return 0;
+  }
+
   writeFileSync(hooksPath, updated);
   const remaining = listHandledEventsStatic(hooksPath);
   log(`Removed ${removed.join(", ")} from ${basename(hooksPath)}`);

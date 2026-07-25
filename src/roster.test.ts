@@ -28,6 +28,21 @@ describe("md roster --json", () => {
     return JSON.parse(result.stdout);
   };
 
+  it("plain `md roster` prints a human table, not the protocol blob", async () => {
+    // Chaos regression (2026-07-17): the human invocation dumped a single
+    // multi-KB JSON line into the terminal; JSON stays behind --json.
+    const result = await spawnMd(["roster"], {
+      cwd: projectDir,
+      env: { HOME: homeDir, MDFLOW_ENGINE: "" },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("FLOW");
+    expect(result.stdout).toContain("ENGINE");
+    expect(result.stdout).toContain("review");
+    expect(result.stdout).toContain("md roster --json");
+    expect(result.stdout.trimStart().startsWith("{")).toBe(false);
+  });
+
   beforeAll(async () => {
     ({ tempDir, cleanup } = await createTempDir("roster-test-"));
     projectDir = join(tempDir, "project");

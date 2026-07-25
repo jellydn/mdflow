@@ -164,6 +164,22 @@ export const agyPortableAdapter = createPortableAdapter(
   { model: true, temperature: false, maxTokens: false }
 );
 
+// grok supports --model (e.g. grok-code, grok-4); temperature and max-tokens
+// are not exposed in grok --help, so they are dropped rather than guessed.
+export const grokPortableAdapter = createPortableAdapter(
+  "grok",
+  { model: "model", temperature: "temperature", "max-tokens": "max-tokens" },
+  { model: true, temperature: false, maxTokens: false }
+);
+
+// kimi supports --model (alias resolved from config.toml); temperature and
+// max-tokens are not exposed in kimi --help, so they are dropped.
+export const kimiPortableAdapter = createPortableAdapter(
+  "kimi",
+  { model: "model", temperature: "temperature", "max-tokens": "max-tokens" },
+  { model: true, temperature: false, maxTokens: false }
+);
+
 const PORTABLE_ADAPTERS: Record<string, Adapter> = {
   claude: claudePortableAdapter,
   codex: codexPortableAdapter,
@@ -174,6 +190,8 @@ const PORTABLE_ADAPTERS: Record<string, Adapter> = {
   pi: piPortableAdapter,
   "cursor-agent": cursorAgentPortableAdapter,
   agy: agyPortableAdapter,
+  grok: grokPortableAdapter,
+  kimi: kimiPortableAdapter,
 };
 
 /**

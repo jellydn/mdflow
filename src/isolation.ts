@@ -134,10 +134,11 @@ export function applyIsolationDefaults(
 export function applyIsolationEnvironment(
   frontmatter: AgentFrontmatter,
   adapter: ToolAdapter,
-  prepareEnvironment: boolean
+  spec: { cwd: string; interactive: boolean },
 ): AgentFrontmatter {
   if (!adapter.prepareIsolationEnv) return frontmatter;
-  const isolationEnv = adapter.prepareIsolationEnv({ prepareEnvironment });
+  const prepared = adapter.prepareIsolationEnv({ mode: "preview", ...spec });
+  const isolationEnv = prepared?.env;
   if (!isolationEnv || Object.keys(isolationEnv).length === 0) return frontmatter;
 
   const existingEnv =

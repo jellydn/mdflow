@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, join, relative, resolve, sep } from "node:path";
-import { resolveEngine } from "./command";
+import { basename, join, relative, resolve, sep } from "node:path";
+import { resolveEngine, hasInteractiveMarker } from "./command";
 import { isCompatOnlyFrontmatter } from "./compat";
-import { loadFullConfig } from "./config";
+import { getDeclaredFlowDirectories, loadFullConfig } from "./config";
 import { getFrecencyScore, loadHistory } from "./history";
 import { parseFrontmatter } from "./parse";
 import { resolveProjectRoot } from "./project-root";
@@ -41,8 +41,6 @@ export interface FlowCatalog {
 export interface DiscoverFlowCatalogOptions {
 	cwd?: string;
 	homeDir?: string;
-	/** PATH value to inspect. Injectable so discovery never depends on the test runner's PATH. */
-	pathEnv?: string;
 	scorePath?: (path: string) => number;
 }
 
@@ -187,6 +185,7 @@ async function inspectPath(
 		});
 		if (
 			["env", "config", "default"].includes(resolved.source) &&
+			!hasInteractiveMarker(canonical) &&
 			isCompatOnlyFrontmatter(parsed.frontmatter as Record<string, unknown>)
 		)
 			return undefined;
@@ -202,6 +201,8 @@ async function inspectPath(
 			provenanceLabel: source.provenanceLabel,
 			availability: { state: "ready" },
 			frecency: scorePath(canonical),
+			engine: resolved.engine,
+			engineSource: resolved.source,
 			...(typeof parsed.frontmatter.description === "string"
 				? { description: parsed.frontmatter.description }
 				: {}),
@@ -331,16 +332,13 @@ export async function discoverFlowCatalog(
 		});
 	}
 
-	const pathValue = options.pathEnv ?? process.env.PATH ?? "";
-	const pathDirectories = pathValue
-		? [
-				...new Set(
-					pathValue
-						.split(delimiter)
-						.map((directory) => resolve(directory || cwd)),
-				),
-			]
-		: [];
+	// Roster directories are standardized: <project>/flows and
+	// ~/.mdflow/flows are canonical, the flat legacy dirs keep scanning so
+	// existing setups never break, and anything else must be declared via
+	// `flows.directories` in config (declared dirs are rosters too, so they
+	// scan recursively). PATH is deliberately NOT scanned: an executable's
+	// location says nothing about which flows belong in the launcher.
+	const declared = await getDeclaredFlowDirectories({ cwd, homeDir });
 	const sources: FilesystemSource[] = [
 		{
 			root: join(projectRoot, "flows"),
@@ -358,25 +356,67 @@ export async function discoverFlowCatalog(
 			source: ".mdflow",
 			provenanceLabel: "PROJECT · LEGACY",
 		},
+		...declared.project.map(
+			(directory): FilesystemSource => ({
+				root: directory,
+				recursive: true,
+				scope: "project",
+				origin: "project-config",
+				source: directory,
+				provenanceLabel: "PROJECT · CONFIG",
+			}),
+		),
+		{
+			root: join(homeDir, ".mdflow", "flows"),
+			recursive: true,
+			scope: "global",
+			origin: "global-flows",
+			source: "~/.mdflow/flows",
+			provenanceLabel: "GLOBAL",
+		},
 		{
 			root: join(homeDir, ".mdflow"),
 			recursive: false,
 			scope: "global",
 			origin: "global-personal",
 			source: "~/.mdflow",
-			provenanceLabel: "GLOBAL",
+			provenanceLabel: "GLOBAL · LEGACY",
 		},
-		...pathDirectories.map(
+		...declared.global.map(
 			(directory): FilesystemSource => ({
 				root: directory,
-				recursive: false,
+				recursive: true,
 				scope: "global",
-				origin: "path",
+				origin: "global-config",
 				source: directory,
-				provenanceLabel: "PATH",
+				provenanceLabel: "GLOBAL · CONFIG",
 			}),
 		),
 	];
+
+	// A declared directory that does not exist is a config mistake worth
+	// surfacing (unreadable dirs are reported by the walk itself).
+	for (const source of sources) {
+		if (source.origin !== "project-config" && source.origin !== "global-config")
+			continue;
+		try {
+			if (!statSync(source.root).isDirectory()) {
+				diagnostics.push({
+					scope: source.scope,
+					path: source.root,
+					code: "DIRECTORY_UNREADABLE",
+					message: `Declared flows directory is not a directory: ${source.root}`,
+				});
+			}
+		} catch {
+			diagnostics.push({
+				scope: source.scope,
+				path: source.root,
+				code: "DIRECTORY_UNREADABLE",
+				message: `Declared flows directory does not exist: ${source.root}`,
+			});
+		}
+	}
 
 	for (const source of sources) {
 		for (const path of walkMarkdownFiles(source, diagnostics)) {
@@ -386,7 +426,10 @@ export async function discoverFlowCatalog(
 				configEngine,
 				scorePath,
 			);
-			if (candidate) byPath.set(candidate.path, candidate);
+			// First source wins for a given path: a declared directory that
+			// overlaps a standard roster must not relabel the flow's provenance.
+			if (candidate && !byPath.has(candidate.path))
+				byPath.set(candidate.path, candidate);
 		}
 	}
 
@@ -450,10 +493,9 @@ export async function discoverFlowCatalog(
 		diagnostics,
 		counts: {
 			project: flows.filter((flow) => flow.scope === "project").length,
-			global: flows.filter(
-				(flow) => flow.scope === "global" && flow.origin !== "path",
-			).length,
-			path: flows.filter((flow) => flow.origin === "path").length,
+			global: flows.filter((flow) => flow.scope === "global").length,
+			// PATH directories are no longer scanned; retained for payload shape.
+			path: 0,
 			unavailable: flows.filter(
 				(flow) => flow.availability?.state === "unavailable",
 			).length,

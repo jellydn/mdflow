@@ -296,7 +296,7 @@ export class ProcessManager {
   /**
    * Handle shutdown signal (SIGINT/SIGTERM)
    */
-  private async handleShutdown(signal: NodeJS.Signals): Promise<never> {
+  private async handleShutdown(signal: NodeJS.Signals): Promise<void> {
     // Abort any pending operations
     this.abort();
 
@@ -318,7 +318,11 @@ export class ProcessManager {
     // Exit with appropriate code
     // SIGINT = 2, SIGTERM = 15
     const exitCode = signal === "SIGINT" ? 130 : 143;
-    process.exit(exitCode);
+    // Do not force-exit here. Registered runCommand calls are still awaiting
+    // their children; letting those promises settle is what runs per-process
+    // isolation cleanup and other finally blocks. The normal CLI completion
+    // path exits once that cleanup has finished.
+    process.exitCode = exitCode;
   }
 
   /**

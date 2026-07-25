@@ -20,7 +20,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, relative, resolve } from "node:path";
 import { loadFullConfig } from "./config";
-import { resolveEngine } from "./command";
+import { resolveEngine, hasInteractiveMarker } from "./command";
 import { isCompatOnlyFrontmatter } from "./compat";
 import { resolveEvolutionPolicy } from "./evolution-core";
 import { parseFrontmatter } from "./parse";
@@ -786,6 +786,7 @@ function isRunnableFlowFile(path: string): boolean {
 			resolved.source === "default";
 		return !(
 			implicit &&
+			!hasInteractiveMarker(path) &&
 			isCompatOnlyFrontmatter(frontmatter as Record<string, unknown>)
 		);
 	} catch {

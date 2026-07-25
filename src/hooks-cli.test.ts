@@ -205,12 +205,23 @@ describe("md hooks remove", () => {
     expect(existsSync(join(dir, "task.codex.hooks.ts"))).toBe(true);
   });
 
-  it("points at full deletion when the last handler is removed", async () => {
+  it("refuses to strand an empty hooks file when the last handler is removed", async () => {
+    // An empty hooks file blocks every run of the flow, so removing the last
+    // handler without consent must change nothing and point at --yes.
     const f = flow();
     await runHooksCli(["add", f, "stop"], runtime());
     out = [];
-    expect(await runHooksCli(["remove", f, "stop"], runtime())).toBe(0);
-    expect(out.join("\n")).toContain("No handlers remain");
+    err = [];
+    expect(await runHooksCli(["remove", f, "stop"], runtime())).toBe(1);
+    expect(err.join("\n")).toContain("--yes");
+    expect(existsSync(join(dir, "task.codex.hooks.ts"))).toBe(true);
+  });
+
+  it("deletes the file outright when the last handler is removed with --yes", async () => {
+    const f = flow();
+    await runHooksCli(["add", f, "stop"], runtime());
+    expect(await runHooksCli(["remove", f, "stop", "--yes"], runtime())).toBe(0);
+    expect(existsSync(join(dir, "task.codex.hooks.ts"))).toBe(false);
   });
 });
 

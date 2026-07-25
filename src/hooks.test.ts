@@ -544,12 +544,20 @@ describe("applyHooksToFrontmatter", () => {
       _hooks: true,
       config: ["project_doc_max_bytes=0"],
     };
-    const { frontmatter: result } = applyHooksToFrontmatter(codexAdapter, "codex", frontmatter, spec);
+    const {
+      frontmatter: result,
+      isolationOwnedArgs,
+    } = applyHooksToFrontmatter(codexAdapter, "codex", frontmatter, spec);
     expect(result._hooks).toBeUndefined();
     expect(result["dangerously-bypass-hook-trust"]).toBe(true);
     const configs = result.config as string[];
     expect(configs[0]).toBe("project_doc_max_bytes=0");
     expect(configs[1]).toStartWith("hooks={Stop=[{hooks=[{type=");
+    expect(isolationOwnedArgs).toEqual([
+      "--config",
+      configs[1]!,
+      "--dangerously-bypass-hook-trust",
+    ]);
   });
 
   it("claude translation: injects inline --settings, excludes ambient sources, drops safe-mode, discloses", () => {

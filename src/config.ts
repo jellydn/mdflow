@@ -49,12 +49,7 @@ import { homedir } from "os";
 import { join, dirname, resolve } from "path";
 import { existsSync, statSync } from "fs";
 import yaml from "js-yaml";
-import type {
-	AgentFrontmatter,
-	GlobalConfig,
-	CommandDefaults,
-	RunContext,
-} from "./types";
+import type { AgentFrontmatter, GlobalConfig, CommandDefaults } from "./types";
 import { getAdapter, buildBuiltinDefaults } from "./adapters";
 import { safeParseConfig } from "./schema";
 import { ConfigError, getErrorMessage } from "./errors";
@@ -234,11 +229,14 @@ function formatConfigWarning(err: ConfigError): string {
  *
  * @param filePath - Path to the config file
  * @param throwOnInvalid - If true, throws on validation errors; if false, logs warning and returns null
+ * @param quiet - If true, suppresses the warning log (secondary readers that
+ *   must not double-report errors the primary load path already surfaces)
  * @returns Validated config or null if file doesn't exist or is invalid
  */
 async function loadConfigFile(
 	filePath: string,
 	throwOnInvalid: boolean = false,
+	quiet: boolean = false,
 ): Promise<GlobalConfig | null> {
 	const file = Bun.file(filePath);
 	let exists = false;
@@ -259,7 +257,7 @@ async function loadConfigFile(
 			},
 		);
 		if (throwOnInvalid) throw wrapped;
-		console.warn(formatConfigWarning(wrapped));
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
 		return null;
 	}
 
@@ -284,7 +282,7 @@ async function loadConfigFile(
 			},
 		);
 		if (throwOnInvalid) throw wrapped;
-		console.warn(formatConfigWarning(wrapped));
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
 		return null;
 	}
 
@@ -310,7 +308,7 @@ async function loadConfigFile(
 			},
 		);
 		if (throwOnInvalid) throw wrapped;
-		console.warn(formatConfigWarning(wrapped));
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
 		return null;
 	}
 
@@ -329,7 +327,7 @@ async function loadConfigFile(
 			},
 		);
 		if (throwOnInvalid) throw wrapped;
-		console.warn(formatConfigWarning(wrapped));
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
 		return null;
 	}
 
@@ -505,6 +503,74 @@ export async function loadFullConfigStrict(
 	return config;
 }
 
+export interface DeclaredFlowDirectories {
+	/** Directories declared by ~/.mdflow/config.yaml — scanned as global flows. */
+	global: string[];
+	/** Directories declared by project config files — scanned as project flows. */
+	project: string[];
+}
+
+function expandConfigDirectory(
+	entry: string,
+	base: string,
+	homeDir: string,
+): string {
+	const expanded =
+		entry === "~"
+			? homeDir
+			: entry.startsWith("~/") || entry.startsWith("~\\")
+				? join(homeDir, entry.slice(2))
+				: entry;
+	return resolve(base, expanded);
+}
+
+/**
+ * Extra roster directories declared via `flows.directories`, resolved to
+ * absolute paths per declaring scope. The merged `loadFullConfig` view cannot
+ * answer this: global declarations are global flows while project
+ * declarations are project flows, and merging erases that provenance.
+ * Relative entries resolve against the directory of the file that declares
+ * them (the global config resolves against ~/.mdflow itself).
+ */
+export async function getDeclaredFlowDirectories(
+	options: { cwd?: string; homeDir?: string } = {},
+): Promise<DeclaredFlowDirectories> {
+	const cwd = resolve(options.cwd ?? process.cwd());
+	const homeDir = resolve(options.homeDir ?? homedir());
+	const result: DeclaredFlowDirectories = { global: [], project: [] };
+
+	// Quiet: the primary config load path owns warning about broken config;
+	// this secondary read must not double-report (doctor/roster JSON purity).
+	const globalBase = join(homeDir, ".mdflow");
+	const globalConfig = await loadConfigFile(
+		join(globalBase, "config.yaml"),
+		false,
+		true,
+	);
+	for (const entry of globalConfig?.flows?.directories ?? []) {
+		result.global.push(expandConfigDirectory(entry, globalBase, homeDir));
+	}
+
+	const projectFiles: Array<{ path: string; base: string }> = [];
+	const gitRoot = findGitRoot(cwd);
+	if (gitRoot && gitRoot !== cwd) {
+		const gitRootFile = findProjectConfigFile(gitRoot);
+		if (gitRootFile) projectFiles.push({ path: gitRootFile, base: gitRoot });
+	}
+	const cwdFile = findProjectConfigFile(cwd);
+	if (cwdFile) projectFiles.push({ path: cwdFile, base: cwd });
+	for (const { path, base } of projectFiles) {
+		const projectConfig = await loadConfigFile(path, false, true);
+		for (const entry of projectConfig?.flows?.directories ?? []) {
+			result.project.push(expandConfigDirectory(entry, base, homeDir));
+		}
+	}
+
+	result.global = [...new Set(result.global)];
+	result.project = [...new Set(result.project)];
+	return result;
+}
+
 /**
  * Deep clone a GlobalConfig object
  * This ensures modifications to the returned config don't affect the source.
@@ -518,6 +584,10 @@ function deepCloneConfig(config: GlobalConfig): GlobalConfig {
 
 	if (config.evolve !== undefined) {
 		result.evolve = structuredClone(config.evolve);
+	}
+
+	if (config.flows?.directories !== undefined) {
+		result.flows = { directories: [...config.flows.directories] };
 	}
 
 	if (config.commands) {
@@ -547,6 +617,16 @@ export function mergeConfigs(
 
 	if (override.evolve !== undefined) {
 		result.evolve = structuredClone(override.evolve);
+	}
+
+	if (override.flows?.directories !== undefined) {
+		// Declared roster directories accumulate across config layers rather
+		// than replacing each other; every declared directory stays scanned.
+		const merged = [
+			...(result.flows?.directories ?? []),
+			...override.flows.directories,
+		];
+		result.flows = { directories: [...new Set(merged)] };
 	}
 
 	if (override.commands) {

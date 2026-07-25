@@ -20,6 +20,7 @@ describe("md explain --json", () => {
   let binDir: string;
   let spyLog: string;
   let flowPath: string;
+  let bareFlowPath: string;
   let longBody: string;
 
   const env = () => ({
@@ -69,6 +70,11 @@ _inputs:
 ---
 ${longBody}`
     );
+
+    // No _inputs default here: {{ _target }} is genuinely unresolved
+    // unless a --_target override is passed on the command line.
+    bareFlowPath = join(projectDir, "flows", "bare.spyeng.md");
+    await writeFile(bareFlowPath, "Say {{ _target }}.");
   });
 
   afterAll(async () => {
@@ -103,6 +109,24 @@ ${longBody}`
   it("applies --_name CLI overrides to the resolved prompt", async () => {
     const payload = await explainJson([flowPath, "--_target", "goodbye"]);
     expect(payload.prompt).toContain("Say goodbye.");
+  });
+
+  it("reports templateVars and leaves missingTemplateVars empty when a default fills the var", async () => {
+    const payload = await explainJson([flowPath]);
+    expect(payload.templateVars).toContain("_target");
+    expect(payload.missingTemplateVars).toEqual([]);
+  });
+
+  it("reports a var as missing when it has no default and no override", async () => {
+    const payload = await explainJson([bareFlowPath]);
+    expect(payload.templateVars).toEqual(["_target"]);
+    expect(payload.missingTemplateVars).toEqual(["_target"]);
+  });
+
+  it("clears missingTemplateVars when a CLI override supplies the value", async () => {
+    const payload = await explainJson([bareFlowPath, "--_target", "foo"]);
+    expect(payload.templateVars).toEqual(["_target"]);
+    expect(payload.missingTemplateVars).toEqual([]);
   });
 
   it("produces a stable configFingerprint that changes when the flow changes", async () => {

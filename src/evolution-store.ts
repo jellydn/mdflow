@@ -224,48 +224,79 @@ export function atomicWriteJson(path: string, value: unknown): void {
   atomicWriteFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export function withAtomicFileLock<T>(targetPath: string, fn: () => T, staleAfterMs = 60_000): T {
+export function withAtomicFileLock<T>(
+  targetPath: string,
+  fn: () => T,
+  staleAfterMs = 60_000,
+  contendMs = 5_000,
+): T {
   const lockPath = `${targetPath}.lock`;
   mkdirSync(dirname(lockPath), { recursive: true });
   const acquire = () => openSync(lockPath, "wx", 0o600);
-  let fd: number;
-  try {
-    fd = acquire();
-  } catch {
-    // The lock exists. A contender may observe it BETWEEN the owner's
-    // open("wx") and its metadata write, so an empty/unparseable lock file
-    // is NOT evidence of staleness — only age is. A fresh lock whose
-    // metadata cannot be read yet is busy, never stale.
-    let stale = false;
+
+  // Whether the current holder's lock is old enough (and its process gone)
+  // to forcibly take over. Only age proves staleness — a fresh lock whose
+  // metadata hasn't landed yet is busy, never stale.
+  const isStale = (): boolean => {
     let age = Number.POSITIVE_INFINITY;
     try {
       age = Date.now() - statSync(lockPath).mtimeMs;
     } catch {
-      // Lock vanished between open and stat: the owner finished. Retry once.
+      // Lock vanished between open and stat: the owner finished.
+      return true;
     }
     try {
       const value = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: number; createdAt?: string };
-      // A malformed createdAt parses to NaN, and NaN would poison the
-      // staleness math below (NaN > staleAfterMs is false forever). Treat any
-      // non-finite claimed timestamp as absent and trust the file's mtime.
       const claimedCreatedAt = value.createdAt ? Date.parse(value.createdAt) : Number.NaN;
       const claimedAge = Number.isFinite(claimedCreatedAt) ? Date.now() - claimedCreatedAt : age;
       let alive = false;
       if (value.pid) {
         try { process.kill(value.pid, 0); alive = true; } catch {}
       }
-      stale = !alive && Math.min(age, claimedAge) > staleAfterMs;
+      return !alive && Math.min(age, claimedAge) > staleAfterMs;
     } catch {
       // Unreadable metadata: trust the file's own age only.
-      stale = age > staleAfterMs;
+      return age > staleAfterMs;
     }
-    if (!stale) throw new Error(`State file is busy: ${targetPath}`);
-    rmSync(lockPath, { force: true });
+  };
+
+  // The critical section here is a fast small-file write (a receipt append,
+  // a ledger update). Brief contention is normal when parallel eval runs
+  // record results, so busy-losers wait and retry within a bounded window
+  // rather than discarding an already-completed — possibly PAID — run.
+  // Synchronous sleep via Atomics.wait keeps this function synchronous.
+  const sleep = (ms: number) => {
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    } catch {
+      // Environments without SharedArrayBuffer: fall back to a short spin.
+      const until = Date.now() + ms;
+      while (Date.now() < until) { /* spin */ }
+    }
+  };
+
+  const deadline = Date.now() + contendMs;
+  let fd: number;
+  let backoff = 15;
+  for (;;) {
     try {
       fd = acquire();
+      break;
     } catch {
-      // Another contender won the takeover race — the lock is busy again.
-      throw new Error(`State file is busy: ${targetPath}`);
+      if (isStale()) {
+        rmSync(lockPath, { force: true });
+        try {
+          fd = acquire();
+          break;
+        } catch {
+          // Another contender won the takeover race; fall through to retry.
+        }
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`State file is busy: ${targetPath}`);
+      }
+      sleep(Math.min(backoff, Math.max(1, deadline - Date.now())));
+      backoff = Math.min(backoff * 2, 200);
     }
   }
   const token = randomUUID();

@@ -55,6 +55,7 @@ import {
 	hydrateWorkbenchHooksStatus,
 	type WorkbenchHooksStatus,
 } from "./workbench-hooks";
+import { useTerminalSize, type TerminalSizeStream } from "./use-terminal-size";
 
 export type WorkbenchAction =
 	| "run"
@@ -191,6 +192,8 @@ export interface WorkbenchConfig {
 	/** Optional hook-status seams for deterministic demos/tests; production uses the mtime cache. */
 	hooksStatusFor?: (file: AgentFile) => WorkbenchHooksStatus;
 	hydrateHooksStatus?: (file: AgentFile) => Promise<WorkbenchHooksStatus>;
+	/** Size/resize source for the layout. Defaults to process.stdout; injectable for tests. */
+	terminal?: TerminalSizeStream;
 	/** Searchable project setup entry shown without blocking globally installed flows. */
 	projectSetup?: {
 		choices: ReadonlyArray<{ name: string; value: FirstRunChoice }>;
@@ -406,7 +409,7 @@ function createDirectoryFor(
 ): string {
 	if (location === "project") return flowsDirectory;
 	if (location === "cwd") return cwd;
-	if (location === "user") return join(homedir(), ".mdflow");
+	if (location === "user") return join(homedir(), ".mdflow", "flows");
 	return resolve(cwd, customDir.trim() || ".");
 }
 
@@ -980,6 +983,12 @@ function renderColumns(
 	leftWidth: number,
 	rightWidth: number,
 ): string[] {
+	// Narrow terminals collapse to the list alone (rightWidth 0): a padded
+	// two-column row would overflow the real width and soft-wrap into an
+	// interleaved mess.
+	if (rightWidth <= 0) {
+		return left.map((line) => clip(line, leftWidth));
+	}
 	const height = Math.max(left.length, right.length);
 	const separator = ` ${color.dim("│")} `;
 	const lines: string[] = [];
@@ -1726,6 +1735,7 @@ export const workbenchPrompt = createPrompt<WorkbenchResult, WorkbenchConfig>(
 			CanonicalHookEvent[]
 		>([]);
 		const [, setHooksHydrationTick] = useState<object>({});
+		const terminalSize = useTerminalSize(config.terminal);
 
 		const rows = getWorkbenchHomeRows(
 			config.files,
@@ -2175,14 +2185,24 @@ export const workbenchPrompt = createPrompt<WorkbenchResult, WorkbenchConfig>(
 			}
 		});
 
-		const terminalWidth = Math.max(52, process.stdout.columns || 100);
-		const terminalHeight = Math.max(16, process.stdout.rows || 28);
+		// Never render wider than the real terminal: overflowing rows are
+		// soft-wrapped by the terminal itself and the two-column layout
+		// interleaves into garbage (seen live at ~23 columns in a split pane).
+		const terminalWidth = Math.max(20, terminalSize.columns || 100);
+		const terminalHeight = Math.max(16, terminalSize.rows || 28);
 		const contentHeight = Math.max(
 			8,
 			Math.min(config.pageSize ?? 15, terminalHeight - 8),
 		);
-		const leftWidth = Math.max(22, Math.floor((terminalWidth - 3) * 0.42));
-		const rightWidth = Math.max(24, terminalWidth - leftWidth - 3);
+		// Below ~60 columns a list + preview pair physically cannot fit;
+		// collapse to the list alone (rightWidth 0 → single column).
+		const narrowLayout = terminalWidth < 60;
+		const leftWidth = narrowLayout
+			? terminalWidth
+			: Math.max(22, Math.floor((terminalWidth - 3) * 0.42));
+		const rightWidth = narrowLayout
+			? 0
+			: Math.max(24, terminalWidth - leftWidth - 3);
 		const body =
 			screen === "home"
 				? renderHome(

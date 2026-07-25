@@ -15,7 +15,10 @@ import {
 import { applyDefaults } from "./config";
 import { buildArgs } from "./command";
 import { claudeAdapter } from "./adapters/claude";
-import { codexAdapter } from "./adapters/codex";
+import {
+  CODEX_ISOLATION_UNSET_ENV,
+  codexAdapter,
+} from "./adapters/codex";
 import { geminiAdapter } from "./adapters/gemini";
 import { copilotAdapter } from "./adapters/copilot";
 import { opencodeAdapter } from "./adapters/opencode";
@@ -77,26 +80,40 @@ describe("per-engine isolation defaults (verified flags only)", () => {
     });
   });
 
-  test("codex: --ignore-user-config --ephemeral -c project_doc_max_bytes=0", () => {
+  test("codex: --ignore-user-config --ephemeral --skip-git-repo-check -c project_doc_max_bytes=0", () => {
     expect(resolveIsolationDefaults(codexAdapter, "codex").defaults).toEqual({
       "ignore-user-config": true,
       ephemeral: true,
+      // Without this, isolated exec runs refuse to start outside a git repo:
+      // --ignore-user-config drops [projects] trust, and codex then requires
+      // either a trusted directory or this flag.
+      "skip-git-repo-check": true,
       config: ["project_doc_max_bytes=0"],
     });
   });
 
-  test("codex: isolated runs always target the prepared ambient-hook-free home", () => {
-    const env = codexAdapter.prepareIsolationEnv!({ prepareEnvironment: false });
-    expect(env?.CODEX_HOME).toContain("/.mdflow/codex-hooks-home");
+  test("codex: preview describes a fresh per-process home without creating it", () => {
+    const prepared = codexAdapter.prepareIsolationEnv!({
+      mode: "preview",
+      cwd: process.cwd(),
+      interactive: false,
+    });
+    expect(prepared?.env.CODEX_HOME).toContain(
+      "/.mdflow/runtime/codex/run-<fresh-per-process>",
+    );
+    expect(prepared?.unsetEnv).toEqual([...CODEX_ISOLATION_UNSET_ENV]);
+    expect(prepared?.unsetEnv).toContain("CODEX_OSS_PORT");
   });
 
   test("codex: the isolation environment overrides an ambient flow CODEX_HOME", () => {
     const isolated = applyIsolationEnvironment(
       { _env: { CODEX_HOME: "/ambient", KEEP: "yes" } },
       codexAdapter,
-      false
+      { cwd: process.cwd(), interactive: false },
     );
-    expect(isolated._env?.CODEX_HOME).toContain("/.mdflow/codex-hooks-home");
+    expect(isolated._env?.CODEX_HOME).toContain(
+      "/.mdflow/runtime/codex/run-<fresh-per-process>",
+    );
     expect(isolated._env?.KEEP).toBe("yes");
   });
 
@@ -201,6 +218,73 @@ describe("isolation precedence: config defaults < isolation < frontmatter", () =
       'model_reasoning_effort="medium"',
     ]);
   });
+
+  test("codex final isolation owns every hook config and bypass argument", () => {
+    const ownedHook = 'hooks={SessionStart=[{hooks=[{type="command",command="/flow"}]}]}';
+    const args = codexAdapter.finalizeIsolationArgs!(
+      [
+        "--config",
+        'hooks={SessionStart=[{hooks=[{type="command",command="/ambient"}]}]}',
+        "--config=hooks={Stop=[]}",
+        "--config",
+        " hooks={Stop=[]}",
+        "--config",
+        "hooks.SessionStart=[]",
+        "-c=hooks.Stop=[]",
+        "--config= hooks.state={}",
+        "--config",
+        '"hooks".SessionStart=[]',
+        "-c='hooks'.Stop=[]",
+        "--dangerously-bypass-hook-trust=true",
+        "--dangerously-bypass-hook-trust",
+        "false",
+        "--model",
+        "gpt-5.6-sol",
+      ],
+      {
+        interactive: true,
+        ownedHookArgs: [
+          "--config",
+          ownedHook,
+          "--dangerously-bypass-hook-trust",
+        ],
+      },
+    );
+
+    expect(args.join("\n")).not.toContain("/ambient");
+    expect(args).not.toContain("--config=hooks={Stop=[]}");
+    expect(
+      args.filter((arg) => /^\s*hooks(?:\.|=)/.test(arg)),
+    ).toEqual([ownedHook]);
+    expect(args.join("\n")).not.toContain('"hooks".');
+    expect(args.join("\n")).not.toContain("'hooks'.");
+    expect(
+      args.filter((arg) => arg === "--dangerously-bypass-hook-trust"),
+    ).toHaveLength(1);
+    expect(args.filter((arg) => arg === ownedHook)).toHaveLength(1);
+    expect(args).not.toContain("false");
+    expect(args).toContain("gpt-5.6-sol");
+
+    const hookless = codexAdapter.finalizeIsolationArgs!(
+      [
+        "--dangerously-bypass-hook-trust",
+        "--config",
+        "hooks={Stop=[]}",
+        "--config",
+        "hooks.SessionStart=[]",
+        "-c=hooks.Stop=[]",
+        "--config= hooks.state={}",
+        "--config",
+        '"hooks".SessionStart=[]',
+        "-c='hooks'.Stop=[]",
+      ],
+      { interactive: true },
+    );
+    expect(hookless.join("\n")).not.toMatch(/(^|\n)\s*hooks(?:\.|=)/);
+    expect(hookless.join("\n")).not.toContain('"hooks".');
+    expect(hookless.join("\n")).not.toContain("'hooks'.");
+    expect(hookless).not.toContain("--dangerously-bypass-hook-trust");
+  });
 });
 
 describe("interactive mode strips print-only isolation flags", () => {
@@ -217,17 +301,19 @@ describe("interactive mode strips print-only isolation flags", () => {
     expect(result["safe-mode"]).toBe(true);
   });
 
-  test("codex: --ignore-user-config/--ephemeral are exec-only", () => {
+  test("codex: --ignore-user-config/--ephemeral/--skip-git-repo-check are exec-only", () => {
     const frontmatter: AgentFrontmatter = {
       _subcommand: "exec",
       "ignore-user-config": true,
       ephemeral: true,
+      "skip-git-repo-check": true,
       config: ["project_doc_max_bytes=0"],
     };
     const result = codexAdapter.applyInteractiveMode(frontmatter);
     expect(result._subcommand).toBeUndefined();
     expect(result["ignore-user-config"]).toBeUndefined();
     expect(result.ephemeral).toBeUndefined();
+    expect(result["skip-git-repo-check"]).toBeUndefined();
     // -c is top-level; the AGENTS.md kill-switch survives interactive mode.
     expect(result.config).toEqual(["project_doc_max_bytes=0"]);
   });

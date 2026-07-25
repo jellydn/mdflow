@@ -16,9 +16,10 @@
  * bodies, and users rely on their formatting surviving).
  */
 
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, statSync } from "fs";
 import { join } from "path";
 import { parseRawFrontmatter } from "./parse";
+import { atomicWriteFile } from "./evolution-store";
 
 /** Frontmatter keys owned by the compat system. */
 export const COMPAT_KEYS = new Set(["_mdflow_version", "_compat"]);
@@ -251,7 +252,12 @@ export function stampCompatFile(filePath: string, version = mdflowVersion()): bo
     const content = readFileSync(filePath, "utf-8");
     const next = applyCompatStamp(content, version);
     if (next === null) return false;
-    writeFileSync(filePath, next);
+    // Atomic temp+rename: this rewrites the user's SOURCE flow file, so a
+    // torn write (large file, SIGKILL, or a concurrent run) must never leave
+    // it half-written. Preserve the original mode — shebang flows are 0o755
+    // and atomicWriteFile would otherwise default to 0o600.
+    const mode = statSync(filePath).mode & 0o777;
+    atomicWriteFile(filePath, next, mode);
     return true;
   } catch {
     return false;

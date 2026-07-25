@@ -21,6 +21,8 @@ import { opencodeAdapter } from "./opencode";
 import { piAdapter } from "./pi";
 import { cursorAgentAdapter } from "./cursor-agent";
 import { agyAdapter } from "./agy";
+import { grokAdapter } from "./grok";
+import { kimiAdapter } from "./kimi";
 import type { ToolAdapter, AgentFrontmatter } from "../types";
 
 describe("Tool Adapter Registry", () => {
@@ -47,6 +49,14 @@ describe("Tool Adapter Registry", () => {
 
     test("opencode adapter is registered", () => {
       expect(hasAdapter("opencode")).toBe(true);
+    });
+
+    test("grok adapter is registered", () => {
+      expect(hasAdapter("grok")).toBe(true);
+    });
+
+    test("kimi adapter is registered", () => {
+      expect(hasAdapter("kimi")).toBe(true);
     });
 
     test("getRegisteredAdapters returns all built-in adapters", () => {
@@ -156,6 +166,11 @@ describe("Claude Adapter", () => {
     const result = claudeAdapter.applyInteractiveMode(frontmatter);
     expect(result.model).toBe("opus");
     expect(result.verbose).toBe(true);
+  });
+
+  test("prepareEnv disables the print-mode background-task ceiling", () => {
+    const env = claudeAdapter.prepareEnv!();
+    expect(env).toEqual({ CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0" });
   });
 });
 
@@ -366,5 +381,58 @@ describe("agy (Antigravity) Adapter", () => {
     expect(result.print).toBeUndefined();
     expect(result.$1).toBe("prompt-interactive");
     expect(result.model).toBe("gemini-3.1-pro");
+  });
+});
+
+describe("Grok Adapter", () => {
+  test("has correct name", () => {
+    expect(grokAdapter.name).toBe("grok");
+  });
+
+  test("getDefaults maps body to --single (headless print)", () => {
+    expect(grokAdapter.getDefaults().$1).toBe("single");
+  });
+
+  test("applyInteractiveMode drops --single for a positional prompt", () => {
+    const result = grokAdapter.applyInteractiveMode({ $1: "single", model: "grok-4.5" });
+    expect(result.$1).toBeUndefined();
+    expect(result.model).toBe("grok-4.5");
+  });
+
+  test("isolation disables cross-session memory", () => {
+    expect(grokAdapter.getIsolationDefaults?.()["no-memory"]).toBe(true);
+  });
+
+  test("system prompt: replace → --system-prompt-override, append → --rules", () => {
+    const t = grokAdapter.applySystemPrompt!(
+      { replace: "Be terse", append: ["Cite sources", "Stay factual"] },
+      () => "unused",
+    );
+    expect(t.frontmatter?.["system-prompt-override"]).toBe("Be terse");
+    expect(t.frontmatter?.rules).toBe("Cite sources\n\nStay factual");
+  });
+});
+
+describe("Kimi Adapter", () => {
+  test("has correct name", () => {
+    expect(kimiAdapter.name).toBe("kimi");
+  });
+
+  test("getDefaults maps body to --prompt (non-interactive)", () => {
+    expect(kimiAdapter.getDefaults().$1).toBe("prompt");
+  });
+
+  test("applyInteractiveMode drops --prompt for a positional prompt", () => {
+    const result = kimiAdapter.applyInteractiveMode({ $1: "prompt", model: "kimi-k2" });
+    expect(result.$1).toBeUndefined();
+    expect(result.model).toBe("kimi-k2");
+  });
+
+  test("has no isolation controls (ambient, like droid)", () => {
+    expect(kimiAdapter.getIsolationDefaults).toBeUndefined();
+  });
+
+  test("has no system-prompt mechanism", () => {
+    expect(kimiAdapter.applySystemPrompt).toBeUndefined();
   });
 });

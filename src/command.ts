@@ -6,7 +6,7 @@
  */
 
 import type { AgentFrontmatter, Adapter } from "./types";
-import { basename } from "path";
+import { basename, resolve } from "path";
 import { teeToStdoutAndCollect, teeToStderrAndCollect, teeToStdoutWithMarkdownAndCollect } from "./stream";
 import { stopSpinner, isSpinnerRunning } from "./spinner";
 import { getProcessManager } from "./process-manager";
@@ -148,23 +148,29 @@ const VARIADIC_FLAGS = new Set([
  * e.g., "commit.claude.md" → "claude"
  * e.g., "task.gemini.md" → "gemini"
  * e.g., "fix.i.claude.md" → "claude" (with interactive mode)
+ * e.g., "chat.i.md" → undefined ("i" is the interactive marker, never an
+ * engine name — the default engine applies in interactive mode)
  */
 export function parseCommandFromFilename(filePath: string): string | undefined {
   const name = basename(filePath);
   // Match pattern: name.command.md or name.i.command.md
   const match = name.match(/\.([^.]+)\.md$/i);
-  return match?.[1];
+  const segment = match?.[1];
+  // Bare `.i.md` is the interactive marker with no engine segment.
+  if (segment?.toLowerCase() === "i") return undefined;
+  return segment;
 }
 
 /**
  * Check if filename has .i. marker for interactive mode
  * e.g., "fix.i.claude.md" → true
+ * e.g., "chat.i.md" → true (default engine, interactive)
  * e.g., "fix.claude.md" → false
  */
 export function hasInteractiveMarker(filePath: string): boolean {
   const name = basename(filePath);
-  // Match pattern: name.i.command.md
-  return /\.i\.[^.]+\.md$/i.test(name);
+  // Match pattern: name.i.command.md or name.i.md
+  return /\.i\.(?:[^.]+\.)?md$/i.test(name);
 }
 
 function validateResolvedCommand(
@@ -228,13 +234,23 @@ export interface ResolvedEngine {
  * v3's bare dotted filenames (report.final.md) from being misread as engines
  * while .echo.md-style custom engines keep working.
  */
-function filenameEngineExists(candidate: string): boolean {
+export function filenameEngineExists(candidate: string): boolean {
   if (hasAdapter(candidate)) return true;
   try {
     return Bun.which(candidate) !== null;
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether the FILENAME names a real runnable engine (task.claude.md → true).
+ * A filename engine is an execution intent, so such a file is never a plain
+ * document — even when env/config overrides the actual engine choice.
+ */
+export function filenameNamesEngine(filePath: string): boolean {
+  const segment = parseCommandFromFilename(filePath)?.trim();
+  return Boolean(segment && isValidCommandToken(segment) && filenameEngineExists(segment));
 }
 
 /**
@@ -345,7 +361,7 @@ function isValidCommandToken(command: string): boolean {
   return VALID_COMMAND_TOKEN.test(command);
 }
 
-function levenshteinDistance(a: string, b: string): number {
+export function levenshteinDistance(a: string, b: string): number {
   const rows = a.length + 1;
   const cols = b.length + 1;
   const dp: number[][] = Array.from({ length: rows }, (_, i) =>
@@ -570,6 +586,13 @@ export interface RunContext {
   timeoutMs?: number;
   /** Optional working directory for the spawned command. */
   cwd?: string;
+  /** Whether the engine process must receive an adapter-owned isolation lease. */
+  isolated?: boolean;
+  /**
+   * Absolute path to the flow being run, used to classify whether it belongs
+   * to the project it is running in. Unset = treated as visiting.
+   */
+  flowPath?: string;
   /** Capture without replaying captured streams to the terminal. */
   silentCapture?: boolean;
   /**
@@ -757,12 +780,45 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     }
   }
 
+  const spawnCwd = resolve(ctx.cwd ?? process.cwd());
+  let preparedIsolation:
+    | import("./types").PreparedIsolationEnvironment
+    | undefined;
+  if (ctx.isolated && engineAdapter.prepareIsolationEnv) {
+    try {
+      preparedIsolation = engineAdapter.prepareIsolationEnv({
+        mode: "spawn",
+        cwd: spawnCwd,
+        interactive,
+        flowPath: ctx.flowPath,
+      });
+    } catch (err) {
+      // The cause carries the only actionable detail (which path, which fix).
+      // Dropping it left users with a generic line and a log that stopped at
+      // "Executing command", so it is folded into the message itself.
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new CommandError(
+        `Codex isolation preparation failed; no engine process was started. ${detail}`,
+        {
+          errorCode: "ISOLATION_PREPARATION_FAILED",
+          context: { command: normalizedCommand },
+          cause: err,
+        },
+      );
+    }
+    for (const warning of preparedIsolation?.warnings ?? []) {
+      console.error(`Warning [ISOLATION]: ${warning}`);
+    }
+  }
+
   // Merge process.env with provided env. MDFLOW_CONFIG_CWD is mdflow's
   // internal parent→child config pointer for eval children; the ENGINE (and
   // everything it spawns — hooks, nested md runs) must never inherit it, or
   // it would load the outer flow's project config instead of its own.
   const runEnv: Record<string, string | undefined> = { ...adapterEnv, ...process.env, ...env };
   delete runEnv.MDFLOW_CONFIG_CWD;
+  for (const key of preparedIsolation?.unsetEnv ?? []) delete runEnv[key];
+  Object.assign(runEnv, preparedIsolation?.env ?? {});
   // Recursion boundary: an engine session spawned by mdflow injects
   // MDFLOW_ACTIVE_FLOW into its child env, so a nested `md` invocation from
   // inside that session (agent shell tools, inline commands) can be detected
@@ -790,13 +846,47 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   if (interactive) stopSpinner();
   const stdio = resolveCommandStdio({ mode, captureStderr, spinnerActive, interactive });
 
-  const proc = Bun.spawn([normalizedCommand, ...finalArgs], {
-    ...stdio,
-    env: runEnv,
-    cwd: ctx.cwd,
-    detached: process.platform !== "win32",
-  });
+  const spawnEngineProcess = () =>
+    Bun.spawn([normalizedCommand, ...finalArgs], {
+      ...stdio,
+      env: runEnv,
+      cwd: spawnCwd,
+      detached: process.platform !== "win32",
+    });
+  let proc: ReturnType<typeof spawnEngineProcess>;
+  try {
+    proc = spawnEngineProcess();
+  } catch (err) {
+    try {
+      await preparedIsolation?.cleanup?.();
+    } catch (cleanupError) {
+      throw new CommandError(
+        "Codex isolation cleanup failed after the engine could not start.",
+        {
+          errorCode: "ISOLATION_CLEANUP_FAILED",
+          context: { command: normalizedCommand },
+          cause: cleanupError,
+        },
+      );
+    }
+    // The OS rejects oversized argv with a bare "E2BIG" — translate it: the
+    // prompt (body + expanded imports) travels to the engine as a CLI
+    // argument, so there is a hard OS ceiling (~1MB total on macOS/Linux).
+    if ((err as NodeJS.ErrnoException)?.code === "E2BIG" || /E2BIG/.test(String(err))) {
+      const argBytes = finalArgs.reduce((sum, a) => sum + Buffer.byteLength(a) + 1, 0);
+      throw new CommandError(
+        `Prompt too large to pass to the engine (PROMPT_TOO_LARGE): the resolved ` +
+          `arguments total ~${Math.round(argBytes / 1024)}KB, above the OS argv limit. ` +
+          `Trim whatever inflated the prompt — the flow body, imports ` +
+          `(globs like @./src/**/* are the usual cause), or piped {{ _stdin }} input.`,
+        { errorCode: "PROMPT_TOO_LARGE", context: { command: normalizedCommand, argBytes } },
+      );
+    }
+    throw err;
+  }
 
+  let primaryFailure: unknown;
+  try {
   const killTree = (signal: NodeJS.Signals) => {
     if (process.platform !== "win32") {
       try { process.kill(-proc.pid, signal); return; } catch {}
@@ -825,6 +915,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   // Store reference for legacy signal handling (deprecated)
   currentChildProcess = proc;
 
+  preparedIsolation?.onSpawn?.(proc.pid);
   ctx.onSpawn?.(proc.pid);
 
   let stdout = "";
@@ -969,4 +1060,25 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     output: stdout, // backward compatibility
     process: proc,
   };
+  } catch (err) {
+    primaryFailure = err;
+    throw err;
+  } finally {
+    try {
+      await preparedIsolation?.cleanup?.();
+    } catch (cleanupError) {
+      throw new CommandError(
+        "Codex isolation cleanup failed; the run home could not be securely disposed.",
+        {
+          errorCode: "ISOLATION_CLEANUP_FAILED",
+          context: {
+            command: normalizedCommand,
+            childFailure:
+              primaryFailure instanceof Error ? primaryFailure.message : undefined,
+          },
+          cause: cleanupError,
+        },
+      );
+    }
+  }
 }

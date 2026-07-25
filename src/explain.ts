@@ -90,6 +90,10 @@ export interface ExplainResult {
   };
   /** Static eval-suite status (verdict from the trust ledger); local flows only. */
   evaluation?: import("./eval-convention").EvalStatus;
+  /** Every {{ var }} name referenced by the expanded body, in first-seen order. */
+  templateVarNames: string[];
+  /** Subset of templateVarNames left unresolved ([MISSING: name] placeholder). */
+  missingTemplateVars: string[];
 }
 
 function truncateText(text: string, maxLength: number): { text: string; truncated: boolean } {
@@ -120,6 +124,9 @@ export async function analyzeAgent(
     isRemote = true;
   }
 
+  if (!isRemote && !existsSync(localFilePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
   const content = await Bun.file(localFilePath).text();
   const { frontmatter: originalFrontmatter, body: rawBody } = parseFrontmatter(content);
 
@@ -186,6 +193,14 @@ export async function analyzeAgent(
   const interactiveFromFilename = hasInteractiveMarker(localFilePath);
   const interactiveFromCli = passthroughArgs.includes("--_interactive") || passthroughArgs.includes("-_i");
   const interactiveFromFrontmatter = frontmatter._interactive === true || frontmatter._i === true;
+  const interactiveMode =
+    interactiveFromFilename || interactiveFromCli || interactiveFromFrontmatter;
+  const cwdFlagIndex = passthroughArgs.indexOf("--_cwd");
+  const effectiveCwd = resolve(
+    (cwdFlagIndex !== -1 ? passthroughArgs[cwdFlagIndex + 1] : undefined) ??
+      (frontmatter._cwd as string | undefined) ??
+      cwd,
+  );
 
   let interactiveModeSource = "none (print mode)";
   if (interactiveFromFilename) interactiveModeSource = "Filename (.i. marker)";
@@ -198,7 +213,10 @@ export async function analyzeAgent(
   // especially important for hookless Codex flows: their prepared CODEX_HOME
   // is part of isolation even though no lifecycle-hook flags are present.
   if (isolationMode.isolated && engineAdapter.prepareIsolationEnv) {
-    frontmatter = applyIsolationEnvironment(frontmatter, engineAdapter, false);
+    frontmatter = applyIsolationEnvironment(frontmatter, engineAdapter, {
+      cwd: effectiveCwd,
+      interactive: interactiveMode,
+    });
   }
 
   // System prompt: apply the same translation a run would, with a
@@ -227,6 +245,7 @@ export async function analyzeAgent(
   // explain is documented FREE and must never execute hook code. Errors are
   // captured, never thrown: explain always renders.
   let hooksResult: ExplainResult["hooks"];
+  let isolationOwnedHookArgs: string[] = [];
   {
     const { resolveHooksFile, listHandledEventsStatic, applyHooksToFrontmatter } = await import("./hooks");
     const hooksFlagIdx = passthroughArgs.indexOf("--_hooks");
@@ -262,6 +281,7 @@ export async function analyzeAgent(
               prepareEnvironment: false,
             });
             frontmatter = applied.frontmatter;
+            isolationOwnedHookArgs = applied.isolationOwnedArgs;
             hooksResult.warnings = applied.warnings;
           } catch (err) {
             hooksResult.error = (err as Error).message;
@@ -363,8 +383,19 @@ export async function analyzeAgent(
   const finalPromptFull = substituteTemplateVars(expandedBody, templateVars);
   const { text: finalPrompt, truncated: promptTruncated } = truncateText(finalPromptFull, PROMPT_PREVIEW_LENGTH);
 
+  const templateVarNames = Object.keys(templateVars);
+  const missingTemplateVars = templateVarNames.filter(
+    (key) => templateVars[key] === `[MISSING: ${key}]`
+  );
+
   const templateVarSet = new Set(Object.keys(templateVars));
-  const finalArgs = buildArgs(frontmatter, templateVarSet);
+  let finalArgs = buildArgs(frontmatter, templateVarSet);
+  if (isolationMode.isolated && engineAdapter.finalizeIsolationArgs) {
+    finalArgs = engineAdapter.finalizeIsolationArgs(finalArgs, {
+      interactive: interactiveMode,
+      ownedHookArgs: isolationOwnedHookArgs,
+    });
+  }
   const positionalMappings = extractPositionalMappings(frontmatter);
 
   const model = frontmatter.model as string | undefined;
@@ -399,6 +430,8 @@ export async function analyzeAgent(
     systemPrompt: systemPromptResult,
     hooks: hooksResult,
     evaluation: evaluationResult,
+    templateVarNames,
+    missingTemplateVars,
   };
 }
 
@@ -577,6 +610,10 @@ export interface ExplainJson {
    * executes.
    */
   evaluation?: import("./eval-convention").EvalStatus;
+  /** Every {{ var }} name referenced by the expanded body. */
+  templateVars: string[];
+  /** Subset of templateVars left unresolved ([MISSING: name] placeholder). */
+  missingTemplateVars: string[];
 }
 
 /**
@@ -683,6 +720,8 @@ export async function explainJsonFromResult(
     inputs: mapInputsToProtocol(result.originalFrontmatter._inputs),
     warnings,
     configFingerprint: `sha256:${fingerprint}`,
+    templateVars: result.templateVarNames,
+    missingTemplateVars: result.missingTemplateVars,
     ...(result.evaluation ? { evaluation: result.evaluation } : {}),
   };
 }

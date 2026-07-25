@@ -91,11 +91,22 @@ describe("strict vs non-strict template mode", () => {
       expect(result).toBe(" works");
     });
 
-    test("throws even with default filter in strict mode", () => {
-      // Strict mode validates variables BEFORE rendering, so default filter doesn't help
+    test("a default filter makes the variable optional, even in strict mode", () => {
+      // Chaos regression (2026-07-17): strict validation used to reject
+      // {{ _name | default: "World" }} as missing — defeating the exact
+      // purpose of the documented default filter. Optional-by-default now.
+      const result = substituteTemplateVars(
+        '{{ _name | default: "World" }}',
+        {},
+        { strict: true }
+      );
+      expect(result).toBe("World");
+    });
+
+    test("a bare occurrence elsewhere keeps a defaulted variable required", () => {
       expect(() =>
         substituteTemplateVars(
-          '{{ _name | default: "World" }}',
+          '{{ _name | default: "World" }} and {{ _name }}',
           {},
           { strict: true }
         )

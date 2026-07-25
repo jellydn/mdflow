@@ -118,6 +118,15 @@ export const claudeAdapter: ToolAdapter = {
     }
     return { frontmatter };
   },
+
+  prepareEnv(): Record<string, string> | undefined {
+    // Claude Code print mode terminates the whole run if background tasks
+    // are still alive after 600s ("Background tasks still running after
+    // 600s; terminating"), which kills long flow steps mid-run. "0"
+    // disables that ceiling. process.env and flow _env both override this
+    // (adapter env is the lowest-precedence layer in runCommand).
+    return { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0" };
+  },
 };
 
 export default claudeAdapter;

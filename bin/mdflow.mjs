@@ -11,7 +11,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -69,7 +69,13 @@ if (!bun) {
   if (!bun) process.exit(1);
 }
 
-const run = spawnSync(bun, [entry, ...process.argv.slice(2)], { stdio: "inherit" });
+// The ad-hoc `md.COMMAND "prompt"` form is detected from the invoked
+// executable name, which this bridge would otherwise erase (the child only
+// sees bun + the entry path). Forward it explicitly.
+const run = spawnSync(bun, [entry, ...process.argv.slice(2)], {
+  stdio: "inherit",
+  env: { ...process.env, MDFLOW_INVOKED_AS: basename(process.argv[1] ?? "") },
+});
 if (run.error) {
   console.error(`Failed to launch bun: ${run.error.message}`);
   process.exit(1);

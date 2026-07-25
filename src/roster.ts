@@ -3,8 +3,10 @@
  *
  * Prints a single JSON object describing every runnable flow visible from the
  * invocation cwd: project flows (`<projectRoot>/flows/*.md`), global flows
- * (`~/.mdflow/*.md`), and registry flows (`.mdflow/registry/` at project and
- * user scope). Documents — markdown files with no frontmatter and no engine
+ * (`~/.mdflow/flows/*.md`, plus legacy `~/.mdflow/*.md`), rosters declared
+ * via `flows.directories` in config, and registry flows
+ * (`.mdflow/registry/` at project and user scope). Documents — markdown
+ * files with no frontmatter and no engine
  * marker — are excluded, mirroring the runtime document-vs-flow decision in
  * cli-runner. The enumeration itself always exits 0 (unreadable directories
  * become `warnings`); `roster sync` exits 1 when the managed surfaces are
@@ -16,7 +18,11 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { parseFrontmatter } from "./parse";
 import { resolveEngine, hasInteractiveMarker } from "./command";
-import { loadFullConfig, isInteractiveModeEnabled } from "./config";
+import {
+	getDeclaredFlowDirectories,
+	loadFullConfig,
+	isInteractiveModeEnabled,
+} from "./config";
 import { isCompatOnlyFrontmatter } from "./compat";
 import { resolveProjectRoot } from "./project-root";
 import { inspectAgentGuidance, syncAgentGuidance } from "./agent-guidance";
@@ -176,6 +182,9 @@ export async function collectRoster(
 
 	const flows: RosterFlow[] = [];
 	const seenIds = new Set<string>();
+	// First source wins per file: a declared directory overlapping a standard
+	// roster must not list the same flow twice under different ids.
+	const seenPaths = new Set<string>();
 
 	const scanDir = (dir: string, source: FlowSource): void => {
 		let entries: string[];
@@ -197,6 +206,8 @@ export async function collectRoster(
 
 		for (const fileName of fileNames) {
 			const path = resolve(join(dir, fileName));
+			if (seenPaths.has(path)) continue;
+			seenPaths.add(path);
 
 			let mtimeMs: number;
 			try {
@@ -235,9 +246,11 @@ export async function collectRoster(
 			}
 
 			// Document rule (mirrors cli-runner): a file with no meaningful
-			// frontmatter whose engine only resolved implicitly is not a flow.
+			// frontmatter whose engine only resolved implicitly is not a flow —
+			// unless the `.i.` filename marker declares it runnable.
 			if (
 				isImplicitEngineSource(resolved.source) &&
+				!hasInteractiveMarker(path) &&
 				isCompatOnlyFrontmatter(frontmatter as Record<string, unknown>)
 			) {
 				continue;
@@ -273,10 +286,19 @@ export async function collectRoster(
 
 	// Ordering contract: project flows first (alphabetical), then global,
 	// then registry (project-scope registry before user-scope registry).
+	// Config-declared directories list right after the standard roster of
+	// their scope; the legacy flat ~/.mdflow roster scans last among globals.
+	const declared = await getDeclaredFlowDirectories({ cwd, homeDir });
 	const sources = new Set(options.sources ?? ["project", "global", "registry"]);
-	if (projectRoot && sources.has("project"))
+	if (projectRoot && sources.has("project")) {
 		scanDir(join(projectRoot, "flows"), "project");
-	if (sources.has("global")) scanDir(join(homeDir, ".mdflow"), "global");
+		for (const dir of declared.project) scanDir(dir, "project");
+	}
+	if (sources.has("global")) {
+		scanDir(join(homeDir, ".mdflow", "flows"), "global");
+		for (const dir of declared.global) scanDir(dir, "global");
+		scanDir(join(homeDir, ".mdflow"), "global");
+	}
 	if (projectRoot && sources.has("registry"))
 		scanDir(join(projectRoot, ".mdflow", "registry"), "registry");
 	if (sources.has("registry"))
@@ -412,6 +434,46 @@ export async function runRoster(
 	}
 
 	const roster = await collectRoster({ cwd });
-	process.stdout.write(`${JSON.stringify(roster)}\n`);
+	if (args.includes("--json")) {
+		process.stdout.write(`${JSON.stringify(roster)}\n`);
+		return 0;
+	}
+
+	// Human surface: a readable table. The protocol blob stays behind
+	// --json — chaos round 3 found plain `md roster` dumping a single
+	// 20KB JSON line into the terminal.
+	if (roster.flows.length === 0) {
+		process.stdout.write(
+			"No flows found. Create one with `md create` or scaffold a roster with `md init --yes`.\n",
+		);
+		return 0;
+	}
+	const rows = roster.flows.map((flow) => ({
+		name: flow.name,
+		engine: flow.engine ?? "?",
+		source: flow.source,
+		description: flow.description ?? "",
+	}));
+	const nameWidth = Math.max(4, ...rows.map((row) => row.name.length));
+	const engineWidth = Math.max(6, ...rows.map((row) => row.engine.length));
+	const sourceWidth = Math.max(6, ...rows.map((row) => row.source.length));
+	const pad = (text: string, width: number) => text.padEnd(width);
+	process.stdout.write(
+		`${pad("FLOW", nameWidth)}  ${pad("ENGINE", engineWidth)}  ${pad("SOURCE", sourceWidth)}  DESCRIPTION\n`,
+	);
+	for (const row of rows) {
+		process.stdout.write(
+			`${pad(row.name, nameWidth)}  ${pad(row.engine, engineWidth)}  ${pad(row.source, sourceWidth)}  ${row.description}\n`,
+		);
+	}
+	const projectCount = roster.flows.filter(
+		(flow) => flow.source === "project",
+	).length;
+	process.stdout.write(
+		`${roster.flows.length} flows (${projectCount} project, ${roster.flows.length - projectCount} global) · md roster --json for the machine format\n`,
+	);
+	for (const warning of roster.warnings) {
+		process.stderr.write(`${warning}\n`);
+	}
 	return 0;
 }

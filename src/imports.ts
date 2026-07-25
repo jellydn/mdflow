@@ -476,11 +476,19 @@ function parseSymbolExtractionInternal(path: string): { path: string; symbol?: s
 }
 
 /**
- * Extract lines from content by range
+ * Extract lines from content by range.
+ * The END may run past EOF (a forgiving "to the end" range), but a START
+ * beyond the file is an error: it selects nothing, and a flow that silently
+ * imports empty context runs the engine with the evidence missing.
  */
 function extractLines(content: string, start: number, end: number): string {
   const lines = content.split("\n");
-  // Convert to 0-indexed, clamp to valid range
+  if (start > lines.length) {
+    throw new Error(
+      `Line range ${start}-${end} is out of range: the file has only ${lines.length} line${lines.length === 1 ? "" : "s"}`
+    );
+  }
+  // Convert to 0-indexed, clamp the end to EOF
   const startIdx = Math.max(0, start - 1);
   const endIdx = Math.min(lines.length, end);
   return lines.slice(startIdx, endIdx).join("\n");
@@ -1099,6 +1107,15 @@ async function processGlobImport(
   // Log warning about skipped binary files
   if (skippedBinaryFiles.length > 0 && verbose) {
     console.error(`[imports] Skipped ${skippedBinaryFiles.length} binary file(s): ${skippedBinaryFiles.join(", ")}`);
+  }
+
+  // A glob that matched nothing usually means a typo'd pattern — the flow
+  // would run with its context silently missing. Warn (not error: an
+  // optional catch-all like @./docs/**/*.md can legitimately be empty).
+  if (files.length === 0) {
+    console.error(
+      `Warning [GLOB_NO_MATCHES]: import glob "${pattern}" matched no files — the flow runs without that context.`
+    );
   }
 
   // Sort by path for consistent ordering

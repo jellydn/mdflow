@@ -20,6 +20,10 @@ import { spawnSync } from "node:child_process";
 import type { AgentFile } from "./cli";
 import { LRUCache } from "./cache";
 import { recordTouch, getFrecencyScore } from "./history";
+import {
+  useTerminalSize,
+  type TerminalSizeStream,
+} from "./use-terminal-size";
 
 /** Result from file selector - either a path to run, edit, or dry-run */
 export interface FileSelectorResult {
@@ -62,20 +66,6 @@ function readFileContentSync(filePath: string): string {
   } catch (error) {
     return `[Error reading file: ${error}]`;
   }
-}
-
-/**
- * Get terminal width, defaulting to 80 if unavailable
- */
-function getTerminalWidth(): number {
-  return process.stdout.columns || 80;
-}
-
-/**
- * Get terminal height, defaulting to 24 if unavailable
- */
-function getTerminalHeight(): number {
-  return process.stdout.rows || 24;
 }
 
 /**
@@ -416,6 +406,8 @@ export interface FileSelectorConfig {
   message: string;
   files: AgentFile[];
   pageSize?: number;
+  /** Size/resize source for the layout. Defaults to process.stdout; injectable for tests. */
+  terminal?: TerminalSizeStream;
 }
 
 /**
@@ -454,8 +446,9 @@ export const fileSelector = createPrompt<FileSelectorResult, FileSelectorConfig>
     const currentFile = filteredFiles[effectiveCursor];
 
     // Calculate layout dimensions early (needed for scroll step)
-    const termWidth = getTerminalWidth();
-    const termHeight = getTerminalHeight();
+    const terminalSize = useTerminalSize(config.terminal);
+    const termWidth = terminalSize.columns || 80;
+    const termHeight = terminalSize.rows || 24;
     const listWidth = Math.floor(termWidth * 0.35);
     const separatorWidth = 3;
     const previewWidth = termWidth - listWidth - separatorWidth - 2;

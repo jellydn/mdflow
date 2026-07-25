@@ -275,6 +275,37 @@ Just some content`,
 			expect(result.exitCode).toBe(0);
 			expect(result.errorMessage).toBeUndefined();
 		});
+
+		it("executes a frontmatter-less .i.md file interactively with the default engine", async () => {
+			env.addFile("/test/chat.i.md", "Start a conversation.");
+
+			let captured: RunContext | undefined;
+			const runCommandFn = async (ctx: RunContext): Promise<RunResult> => {
+				captured = ctx;
+				return {
+					exitCode: 0,
+					stdout: "",
+					stderr: "",
+					output: "",
+					process: null as unknown as ReturnType<typeof Bun.spawn>,
+				};
+			};
+			const runner = new CliRunner({
+				env,
+				isStdinTTY: true,
+				isStdoutTTY: true,
+				cwd: "/test",
+				runCommandFn,
+			});
+
+			const result = await runner.run(["node", "md", "/test/chat.i.md"]);
+			expect(result.exitCode).toBe(0);
+			// The `.i.` marker makes the file a flow: it executes rather than
+			// printing as a document, on the default engine, in interactive mode.
+			expect(captured).toBeDefined();
+			expect(captured?.command).toBe("pi");
+			expect(captured?.interactive).toBe(true);
+		});
 	});
 
 	describe("--_dry-run flag", () => {
@@ -556,6 +587,30 @@ Hello {{ _missing_var }}`,
 			const result = await runner.run(["node", "md", "/test/missing.echo.md"]);
 			expect(result.exitCode).toBe(1);
 			expect(result.errorMessage).toContain("Missing template variables");
+			// The error is actionable: it names the exact flag to pass.
+			expect(result.errorMessage).toContain('--_missing_var "<value>"');
+		});
+
+		it("missing-variable errors explain _stdin as piped input, not a flag", async () => {
+			env.addFile(
+				"/test/stdin.echo.md",
+				`---
+---
+Summarize: {{ _stdin }}`,
+			);
+
+			const runner = new CliRunner({
+				env,
+				isStdinTTY: false,
+				stdinContent: "",
+				cwd: "/test",
+			});
+
+			const result = await runner.run(["node", "md", "/test/stdin.echo.md"]);
+			expect(result.exitCode).toBe(1);
+			expect(result.errorMessage).toContain("_stdin");
+			expect(result.errorMessage).toContain("piped input");
+			expect(result.errorMessage).not.toContain('--_stdin "<value>"');
 		});
 
 		it("handles _varname fields from frontmatter", async () => {
@@ -851,6 +906,7 @@ _output:
 			"logs",
 			"explain",
 			"roster",
+			"catalog",
 			"eval",
 			"evolve",
 			"feedback",

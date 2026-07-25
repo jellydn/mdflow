@@ -48,11 +48,12 @@ describe("pre-runner global help router", () => {
 		// --dry-run-alias flag lines added post-audit, roster sync (--agents),
 		// the eval management subcommand lines (md eval add|list|remove|coverage),
 		// the init --agents/--print-guide flags, the project-roster setup note,
-		// and the md capture command.
-		expect(Buffer.byteLength(help.stdout)).toBe(6522);
+		// the md capture command, and the ~/.mdflow/flows + flows.directories
+		// discovery standardization.
+		expect(Buffer.byteLength(help.stdout)).toBe(6617);
 		expect(
 			new Bun.CryptoHasher("sha256").update(help.stdout).digest("hex"),
-		).toBe("c82af04e3d12f8b757dfe6c9331e146f5d2e8d274ff2d9a4faca7b206a8dc811");
+		).toBe("efc3570bc56d9fdf30c7cfa231753c8ad3cec7a547f627454e9591b4a020800e");
 		expect(help.stdout).toMatchSnapshot();
 	});
 

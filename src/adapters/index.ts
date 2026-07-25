@@ -23,6 +23,8 @@ import { opencodeAdapter } from "./opencode";
 import { piAdapter } from "./pi";
 import { cursorAgentAdapter } from "./cursor-agent";
 import { agyAdapter } from "./agy";
+import { grokAdapter } from "./grok";
+import { kimiAdapter } from "./kimi";
 
 /**
  * Default adapter for unknown tools
@@ -131,6 +133,8 @@ function initializeBuiltinAdapters(): void {
   registerAdapter(piAdapter);
   registerAdapter(cursorAgentAdapter);
   registerAdapter(agyAdapter);
+  registerAdapter(grokAdapter);
+  registerAdapter(kimiAdapter);
 }
 
 // Initialize built-in adapters on module load

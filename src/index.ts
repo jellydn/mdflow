@@ -71,7 +71,10 @@ async function main() {
       // Best-effort cleanup during shutdown
     }
 
-    process.exit(exitCode);
+    // Let the active run unwind after its child is terminated. Forced exit
+    // here bypasses runCommand finally blocks (including isolated-home
+    // disposal). The normal top-level completion path exits afterward.
+    process.exitCode = exitCode;
   };
 
   process.once("SIGINT", () => shutdown(130));

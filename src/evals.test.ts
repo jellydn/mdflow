@@ -382,13 +382,18 @@ describe("trust ledger", () => {
     expect(readEvalLedger(ledger)["flows/x.eval.ts"]!.lastCleanAt).toBeUndefined();
   });
 
-  test("a concurrent ledger writer gets a clear busy result instead of a lost update", () => {
+  test("a concurrent ledger writer waits, then surfaces busy instead of a lost update", () => {
+    // A live-pid lock held forever is never stale; after the bounded
+    // contention window the writer surfaces "busy" rather than silently
+    // dropping the update. (Short window here keeps the test fast — parallel
+    // runs get a real wait so a completed paid run isn't discarded.)
     const ledger = join(tempDir, "busy-ledger.json");
     writeFileSync(`${ledger}.lock`, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
     expect(() => recordEvalResult(
       "flows/x.eval.ts",
       { flow: "flows/x.md", pass: 0, fail: 1, total: 1, lastRunAt: new Date().toISOString(), full: true },
-      ledger
+      ledger,
+      50
     )).toThrow("State file is busy");
     expect(existsSync(ledger)).toBe(false);
   });

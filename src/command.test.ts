@@ -1,7 +1,8 @@
 import { expect, test, describe, spyOn, beforeEach, afterEach } from "bun:test";
-import { parseCommandFromFilename, resolveCommand, resolveEngine, DEFAULT_ENGINE, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, resolveCommandStdio, runCommand, type CaptureMode } from "./command";
+import { parseCommandFromFilename, hasInteractiveMarker, resolveCommand, resolveEngine, DEFAULT_ENGINE, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, resolveCommandStdio, runCommand, type CaptureMode } from "./command";
 import type { AgentFrontmatter } from "./types";
 import { CommandError } from "./errors";
+import { registerAdapter } from "./adapters";
 
 describe("parseCommandFromFilename", () => {
   test("extracts command from filename pattern", () => {
@@ -23,6 +24,33 @@ describe("parseCommandFromFilename", () => {
   test("handles case insensitivity", () => {
     expect(parseCommandFromFilename("task.CLAUDE.md")).toBe("CLAUDE");
     expect(parseCommandFromFilename("task.Claude.MD")).toBe("Claude");
+  });
+
+  test("bare .i.md is the interactive marker, never an engine named i", () => {
+    expect(parseCommandFromFilename("chat.i.md")).toBeUndefined();
+    expect(parseCommandFromFilename("chat.I.md")).toBeUndefined();
+    expect(parseCommandFromFilename("/path/to/chat.i.md")).toBeUndefined();
+    // The marker before an engine segment still yields the engine.
+    expect(parseCommandFromFilename("fix.i.claude.md")).toBe("claude");
+  });
+});
+
+describe("hasInteractiveMarker", () => {
+  test("detects .i. with an engine segment", () => {
+    expect(hasInteractiveMarker("fix.i.claude.md")).toBe(true);
+    expect(hasInteractiveMarker("fix.claude.md")).toBe(false);
+  });
+
+  test("detects bare .i.md (default engine, interactive)", () => {
+    expect(hasInteractiveMarker("chat.i.md")).toBe(true);
+    expect(hasInteractiveMarker("/path/to/chat.I.MD")).toBe(true);
+  });
+
+  test("never matches lookalike names", () => {
+    expect(hasInteractiveMarker("i.md")).toBe(false);
+    expect(hasInteractiveMarker("info.md")).toBe(false);
+    expect(hasInteractiveMarker("task.iq.md")).toBe(false);
+    expect(hasInteractiveMarker("task.md")).toBe(false);
   });
 });
 
@@ -147,6 +175,17 @@ describe("resolveEngine ladder", () => {
   test("blank env and config values are ignored", () => {
     const resolved = resolveEngine("task.md", undefined, { env: { MDFLOW_ENGINE: "  " }, configEngine: "" });
     expect(resolved.source).toBe("default");
+  });
+
+  test("bare .i.md never reads as an engine and never reports a skip", () => {
+    const resolved = resolveEngine("chat.i.md", undefined, noEnv);
+    expect(resolved.engine).toBe(DEFAULT_ENGINE);
+    expect(resolved.source).toBe("default");
+    expect(resolved.skippedFilenameEngine).toBeUndefined();
+
+    // Frontmatter and config still outrank the default.
+    expect(resolveEngine("chat.i.md", { engine: "claude" }, noEnv).source).toBe("frontmatter");
+    expect(resolveEngine("chat.i.md", undefined, { ...noEnv, configEngine: "claude" }).source).toBe("config");
   });
 });
 
@@ -496,6 +535,61 @@ describe("runCommand timeout containment", () => {
       expect(result.timedOut).toBe(true);
       await Bun.sleep(600);
       expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("disposes an isolation lease only after the timed-out child exits", async () => {
+    if (process.platform === "win32") return;
+    const {
+      existsSync,
+      mkdirSync,
+      mkdtempSync,
+      rmSync,
+    } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "mdflow-isolation-timeout-"));
+    const home = join(dir, "lease-home");
+    const childExited = join(dir, "child-exited");
+    const command = "sh";
+
+    let cleanupSawExitedChild = false;
+    registerAdapter({
+      name: command,
+      getDefaults: () => ({}),
+      applyInteractiveMode: (frontmatter) => frontmatter,
+      prepareIsolationEnv: () => {
+        mkdirSync(home);
+        return {
+          env: { LEASE_HOME: home, CHILD_EXITED: childExited },
+          cleanup: () => {
+            cleanupSawExitedChild = existsSync(childExited);
+            rmSync(home, { recursive: true, force: true });
+          },
+        };
+      },
+    });
+
+    try {
+      const result = await runCommand({
+        command,
+        args: [
+          "-c",
+          `trap 'touch "$CHILD_EXITED"; exit 0' TERM; while :; do sleep 1; done`,
+        ],
+        positionals: [],
+        positionalMappings: new Map(),
+        captureOutput: true,
+        captureStderr: true,
+        silentCapture: true,
+        timeoutMs: 50,
+        isolated: true,
+      });
+      expect(result.timedOut).toBe(true);
+      expect(cleanupSawExitedChild).toBe(true);
+      expect(existsSync(home)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

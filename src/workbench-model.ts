@@ -240,6 +240,8 @@ const PREFERRED_ENGINE_ORDER = [
 	"droid",
 	"cursor-agent",
 	"agy",
+	"grok",
+	"kimi",
 ];
 
 /** Registered engines in composer order: the default first, unknowns last. */
@@ -272,6 +274,8 @@ const MODEL_SUGGESTIONS: Record<string, readonly string[]> = {
 		"gpt-5.2",
 		"gemini-3-pro-preview",
 	],
+	grok: ["grok-4.5"],
+	// kimi models are provider-configured (config.toml aliases) — free text.
 };
 
 /** Model suggestions for an engine; empty means "free text only". */

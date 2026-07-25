@@ -71,9 +71,10 @@ Agent file discovery (in priority order):
   1. Explicit path:      md ./path/to/agent.md
   2. Project flows:      ./flows/
   3. Legacy project:     ./.mdflow/
-  4. Personal flows:     ~/.mdflow/
-  5. $PATH directories
-  6. Current directory:  ./
+  4. Personal flows:     ~/.mdflow/flows/ (legacy: ~/.mdflow/)
+  5. Declared rosters:   flows.directories in ~/.mdflow/config.yaml
+  6. $PATH directories
+  7. Current directory:  ./
 
 All non-system frontmatter keys are passed as CLI flags to the command.
 Global defaults can be set in ~/.mdflow/config.yaml

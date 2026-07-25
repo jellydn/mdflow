@@ -124,8 +124,11 @@ export type FlowOrigin =
 	| "project-flows"
 	| "project-legacy"
 	| "project-registry"
+	| "project-config"
+	| "global-flows"
 	| "global-personal"
 	| "global-registry"
+	| "global-config"
 	| "path";
 
 export interface FlowRegistryMetadata {
@@ -148,6 +151,9 @@ export interface AgentFile {
 	origin?: FlowOrigin;
 	relativePath?: string;
 	provenanceLabel?: string;
+	/** Resolved engine and the rung it resolved from (frontmatter/filename/env/config/default). */
+	engine?: string;
+	engineSource?: string;
 	availability?:
 		| { state: "ready" }
 		| {
@@ -169,11 +175,41 @@ export interface AgentFile {
  * When a markdown file or subcommand is provided: ALL flags pass through
  * When no file is provided: md's own flags are processed (--help)
  */
+/**
+ * Global flags that consume the following token as their VALUE. When one
+ * precedes the file, that value token must NOT be mistaken for the
+ * file/subcommand — otherwise `md --engine echo flow.md` treats "echo"
+ * (the engine name) as the flow and "flow.md" as the engine (chaos round 6).
+ * The `--flag=value` form is self-contained and never triggers this.
+ */
+const VALUE_TAKING_GLOBAL_FLAGS = new Set([
+	"--engine",
+	"--_command",
+	"-_c",
+	"--tool",
+	"--_cwd",
+	"--_system-prompt",
+	"--_append-system-prompt",
+	"--_hooks",
+]);
+
 export function parseCliArgs(argv: string[]): CliArgs {
 	const args = argv.slice(2);
 
-	// First, find if there's a file/subcommand (first non-flag argument)
-	const fileIndex = args.findIndex((arg) => !arg.startsWith("-"));
+	// Find the file/subcommand: the first non-flag argument that is not the
+	// value of a preceding value-taking flag.
+	let fileIndex = -1;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i]!;
+		if (VALUE_TAKING_GLOBAL_FLAGS.has(arg)) {
+			i++; // skip this flag's value token
+			continue;
+		}
+		if (!arg.startsWith("-")) {
+			fileIndex = i;
+			break;
+		}
+	}
 	const filePath = fileIndex >= 0 ? args[fileIndex] : "";
 
 	// If we have a file/subcommand, everything else passes through
@@ -228,13 +264,17 @@ const PROJECT_FLOWS_DIR = "flows";
 /** User-level agent directory */
 const USER_AGENTS_DIR = join(homedir(), ".mdflow");
 
+/** Canonical user-level flow roster directory. */
+const USER_FLOWS_DIR = join(USER_AGENTS_DIR, "flows");
+
 /**
  * Find agent markdown files with priority order:
  * 1. Nearest project flow roster: <project>/flows/
  * 2. Legacy project-level: <project>/.mdflow/
- * 3. User-level: ~/.mdflow/
- * 4. $PATH directories
- * 5. Current directory (cwd)
+ * 3. User-level: ~/.mdflow/flows/
+ * 4. Legacy user-level: ~/.mdflow/
+ * 5. $PATH directories
+ * 6. Current directory (cwd)
  *
  * Returns files sorted by frecency (most frequently/recently used first)
  */
@@ -300,7 +340,30 @@ export async function findAgentFiles(): Promise<AgentFile[]> {
 		// Skip if .mdflow/ doesn't exist
 	}
 
-	// 3. User-level: ~/.mdflow/
+	// 3. User-level canonical roster: ~/.mdflow/flows/
+	try {
+		for await (const file of glob.scan({
+			cwd: USER_FLOWS_DIR,
+			absolute: true,
+		})) {
+			const normalizedPath = normalizePath(file);
+			if (!seenPaths.has(normalizedPath)) {
+				seenPaths.add(normalizedPath);
+				const description = extractDescription(normalizedPath);
+				files.push({
+					name: basename(file),
+					path: normalizedPath,
+					source: "~/.mdflow/flows",
+					frecency: getFrecencyScore(normalizedPath),
+					...(description && { description }),
+				});
+			}
+		}
+	} catch {
+		// Skip if ~/.mdflow/flows/ doesn't exist
+	}
+
+	// 4. Legacy user-level: ~/.mdflow/
 	try {
 		for await (const file of glob.scan({
 			cwd: USER_AGENTS_DIR,
@@ -323,7 +386,7 @@ export async function findAgentFiles(): Promise<AgentFile[]> {
 		// Skip if ~/.mdflow/ doesn't exist
 	}
 
-	// 4. $PATH directories
+	// 5. $PATH directories
 	// Use path.delimiter for cross-platform support (: on Unix, ; on Windows)
 	const pathDirs = (process.env.PATH || "").split(delimiter);
 	for (const dir of pathDirs) {
@@ -348,7 +411,7 @@ export async function findAgentFiles(): Promise<AgentFile[]> {
 		}
 	}
 
-	// 5. Current directory
+	// 6. Current directory
 	try {
 		for await (const file of glob.scan({
 			cwd: process.cwd(),
@@ -371,10 +434,11 @@ export async function findAgentFiles(): Promise<AgentFile[]> {
 		// Skip if cwd is not accessible
 	}
 
-	// Source priority: flows > .mdflow > ~/.mdflow > $PATH > cwd
+	// Priority: flows > .mdflow > ~/.mdflow/flows > ~/.mdflow > $PATH > cwd
 	const getSourcePriority = (source: string): number => {
-		if (source === "flows") return 5;
-		if (source === ".mdflow") return 4;
+		if (source === "flows") return 6;
+		if (source === ".mdflow") return 5;
+		if (source === "~/.mdflow/flows") return 4;
 		if (source === "~/.mdflow") return 3;
 		if (source === "cwd") return 1;
 		return 2; // $PATH directories

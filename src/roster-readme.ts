@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { resolveEngine } from "./command";
+import { resolveEngine, hasInteractiveMarker } from "./command";
 import { ContainmentError, containedWritePath } from "./contained-write";
 import { upsertManagedBlock } from "./managed-block";
 import { isCompatOnlyFrontmatter } from "./compat";
@@ -74,6 +74,7 @@ export function inspectRunnableFlowSource(
 	const resolved = resolveEngine(path, frontmatter, { env: {} });
 	if (
 		(resolved.source === "default" || resolved.source === "config") &&
+		!hasInteractiveMarker(path) &&
 		isCompatOnlyFrontmatter(frontmatter)
 	) {
 		return null;

@@ -179,9 +179,9 @@ export function formatCreateScope(
 }
 
 /**
- * Global flow discovery is native: the CLI resolver reads ~/.mdflow/*.md.
- * This post-write assertion protects that invariant without inventing a shim
- * or linking the mdflow package itself.
+ * Global flow discovery is native: the CLI resolver reads
+ * ~/.mdflow/flows/*.md. This post-write assertion protects that invariant
+ * without inventing a shim or linking the mdflow package itself.
  */
 export function ensureGlobalFlowAvailable(
 	receipt: GlobalFlowAvailability,
@@ -492,7 +492,7 @@ Options:
                           it is fail-closed and free until its assertions are real)
   --open                  Open the new flow in $EDITOR
   --project, -p           Use the canonical project flows/ roster (default)
-  --global, -g            Create in ~/.mdflow/; md <name> works everywhere
+  --global, -g            Create in ~/.mdflow/flows/; md <name> works everywhere
   --location cwd          Create directly in the current directory
   --dir, -d <path>        Legacy: create directly in a custom directory
 
@@ -522,7 +522,7 @@ export async function runCreate(
 	const cwd = resolve(runtime.cwd ?? process.cwd());
 	const homeDirectory = resolve(runtime.homeDirectory ?? homedir());
 	const userAgentsDir = resolve(
-		runtime.userAgentsDir ?? join(homeDirectory, ".mdflow"),
+		runtime.userAgentsDir ?? join(homeDirectory, ".mdflow", "flows"),
 	);
 
 	if (options.help) {

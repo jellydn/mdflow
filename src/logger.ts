@@ -134,7 +134,13 @@ export function initLogger(agentFile: string): Logger {
           },
         },
       },
-      pino.destination({ dest: logFile, sync: false })
+      // sync: a CLI process often exits milliseconds after its last log
+      // line. The async SonicBoom destination buffers writes and registers
+      // an exit-time flushSync that THROWS ("sonic boom is not ready yet")
+      // when the fd isn't open yet — every fast error path then printed an
+      // uncaught-exception banner after the real error. Synchronous writes
+      // are microseconds for this log volume and cannot race exit.
+      pino.destination({ dest: logFile, sync: true })
     );
   } catch {
     currentAgentLogPath = null;
@@ -160,7 +166,11 @@ export function getCurrentLogPath(): string | null {
 
 /** Reset module-global logger state for planning/read-only invocations. */
 export function resetLogger(): void {
-  currentLogger.flush();
+  try {
+    currentLogger.flush();
+  } catch {
+    // A destination that never finished opening has nothing to flush.
+  }
   currentLogger = silentLogger;
   currentAgentLogPath = null;
 }

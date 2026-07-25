@@ -616,6 +616,8 @@ export interface AppliedHooks {
   frontmatter: AgentFrontmatter;
   /** Dim disclosures to surface on stderr (e.g. claude isolation tradeoff). */
   warnings: string[];
+  /** Validated hook arguments reserved for the adapter's final isolation pass. */
+  isolationOwnedArgs: string[];
 }
 
 /**
@@ -675,5 +677,9 @@ export function applyHooksToFrontmatter(
     result._env = { ...existingEnv, ...translation.env };
   }
 
-  return { frontmatter: result, warnings: translation.warnings ?? [] };
+  return {
+    frontmatter: result,
+    warnings: translation.warnings ?? [],
+    isolationOwnedArgs: translation.isolationOwnedArgs ?? [],
+  };
 }
