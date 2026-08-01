@@ -90,6 +90,22 @@ describe("markdown-renderer", () => {
         expect(flushed).toContain("Second paragraph");
       });
 
+      it("keeps a block separator between a chunk render and the flush render", () => {
+        // Chaos regression (2026-07-17): renderMarkdown trims marked's
+        // trailing newlines, so consecutive renders were glued together —
+        // real engine output printed "## Why Speed MattersAI is getting
+        // faster." and "* item binline code…".
+        const chunk = renderer.processChunk("- item a\n- item b\n\n");
+        const tail = renderer.processChunk("inline tail text.");
+        const flushed = renderer.flush();
+        const plain = (chunk + tail + flushed).replace(/\x1b\[[0-9;]*m/g, "");
+        expect(plain).toContain("item b");
+        expect(plain).toContain("inline tail text.");
+        expect(plain).not.toContain("item binline");
+        // The chunk render must end with the paragraph separator.
+        expect(chunk.endsWith("\n\n")).toBe(true);
+      });
+
       it("buffers code blocks until complete", () => {
         // Start a code block
         renderer.processChunk("```javascript\n");

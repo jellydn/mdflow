@@ -66,6 +66,22 @@ function isPositionalKey(key: string): boolean {
 }
 
 /**
+ * Variadic flags that consume all following positional arguments.
+ * These must use --flag=value syntax to avoid eating the prompt.
+ */
+const VARIADIC_FLAGS = new Set([
+  "allowed-tools",
+  "allowedTools",
+  "disallowed-tools",
+  "disallowedTools",
+  "tools",
+  "add-dir",
+  "betas",
+  "mcp-config",
+  "plugin-dir",
+]);
+
+/**
  * Convert frontmatter key to CLI flag
  * e.g., "model" -> "--model"
  * e.g., "p" -> "-p"
@@ -123,13 +139,33 @@ export function buildArgsFromFrontmatter(
     // Array -> repeat flag for each value
     if (Array.isArray(value)) {
       for (const v of value) {
-        args.push(toFlag(key), String(v));
+        // Variadic flags need --flag=value syntax to not eat following args
+        if (VARIADIC_FLAGS.has(key)) {
+          args.push(`${toFlag(key)}=${String(v)}`);
+        } else {
+          args.push(toFlag(key), String(v));
+        }
       }
       continue;
     }
 
     // String/number -> flag with value
-    args.push(toFlag(key), String(value));
+    // Variadic flags need --flag=value syntax to not eat following args
+    if (VARIADIC_FLAGS.has(key)) {
+      const strValue = String(value);
+      // Split comma-separated values for variadic flags
+      // Handle both "Read,Edit" and "Bash(git commit:*), Bash(git add:*)"
+      const parts = strValue.includes(', ')
+        ? strValue.split(', ')  // Split on ", " (comma + space)
+        : strValue.includes(',')
+          ? strValue.split(',')  // Split on just ","
+          : [strValue];          // No commas, single value
+      for (const part of parts) {
+        args.push(`${toFlag(key)}=${part.trim()}`);
+      }
+    } else {
+      args.push(toFlag(key), String(value));
+    }
   }
 
   return args;

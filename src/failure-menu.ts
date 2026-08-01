@@ -18,11 +18,17 @@ import {
   isDownKey,
   usePrefix,
   makeTheme,
+  type KeypressEvent,
 } from "@inquirer/core";
+
+interface ExtendedKeypressEvent extends KeypressEvent {
+  sequence?: string;
+  shift?: boolean;
+}
 
 /** Result from the failure menu */
 export interface FailureMenuResult {
-  action: "retry" | "fix" | "quit";
+  action: "retry" | "fix" | "report" | "quit";
 }
 
 /** Menu option */
@@ -90,10 +96,21 @@ export const failureMenu = createPrompt<FailureMenuResult, FailureMenuConfig>(
     const options: MenuOption[] = [
       { key: "r", label: "Retry - run the same command again", action: "retry" },
       { key: "f", label: "Fix with AI - feed error back and retry", action: "fix" },
+      { key: "p", label: "Report this failure as feedback", action: "report" },
       { key: "q", label: "Quit - exit with error code", action: "quit" },
     ];
 
-    useKeypress((key) => {
+    useKeypress((key, readline) => {
+      if (key.name === "tab") {
+        // readline mutates its line before this handler runs, so clear the raw
+        // Tab and keep navigation entirely in the controlled cursor state.
+        readline.clearLine(0);
+        const extKey = key as ExtendedKeypressEvent;
+        const direction = extKey.shift || extKey.sequence === "\x1b[Z" ? -1 : 1;
+        setCursor((cursor + direction + options.length) % options.length);
+        return;
+      }
+
       if (isEnterKey(key)) {
         const option = options[cursor];
         if (option) {
@@ -126,6 +143,10 @@ export const failureMenu = createPrompt<FailureMenuResult, FailureMenuConfig>(
         done({ action: "fix" });
         return;
       }
+      if (key.name === "p") {
+        done({ action: "report" });
+        return;
+      }
     });
 
     // Render
@@ -154,7 +175,7 @@ export const failureMenu = createPrompt<FailureMenuResult, FailureMenuConfig>(
     }
 
     lines.push("");
-    lines.push(`\x1b[90mUse arrow keys to navigate, Enter to select, or press shortcut key\x1b[0m`);
+    lines.push(`\x1b[90mUse arrows or Tab/Shift+Tab, Enter to select, or press shortcut key\x1b[0m`);
 
     return lines.join("\n");
   }

@@ -27,6 +27,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .cache
 *.tsbuildinfo
 .mdflow
+.herenow/
 
 # IntelliJ based IDEs
 .idea
@@ -43,3 +44,16 @@ bundle.js
 # Generated bundles for AI upload
 mdflow-bundle.md
 mdflow-core-bundle.md
+
+# packx context-bundler cache
+.packx_cache/
+
+# web-choices HITL app session state
+.hitl-choice/
+.vercel
+.env*
+
+# local runtime artifacts (agent/tool session state written into the repo cwd)
+.last-cleanup
+backups/
+sessions/

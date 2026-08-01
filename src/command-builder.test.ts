@@ -77,13 +77,26 @@ describe("buildArgsFromFrontmatter", () => {
 
   describe("array values", () => {
     it("repeats flag for each array element", () => {
+      // Non-variadic arrays use space-separated format
+      const result = buildArgsFromFrontmatter(
+        { "include": ["./src", "./tests"] },
+        new Set()
+      );
+      expect(result).toEqual([
+        "--include", "./src",
+        "--include", "./tests",
+      ]);
+    });
+
+    it("variadic flags use = syntax for arrays", () => {
+      // add-dir is a variadic flag, so it uses --flag=value format
       const result = buildArgsFromFrontmatter(
         { "add-dir": ["./src", "./tests"] },
         new Set()
       );
       expect(result).toEqual([
-        "--add-dir", "./src",
-        "--add-dir", "./tests",
+        "--add-dir=./src",
+        "--add-dir=./tests",
       ]);
     });
 
@@ -659,9 +672,9 @@ describe("buildCommand", () => {
     expect(result.args).toContain("opus");
     expect(result.args).toContain("--verbose");
     expect(result.args).not.toContain("--debug");
-    expect(result.args).toContain("--add-dir");
-    expect(result.args).toContain("./src");
-    expect(result.args).toContain("./tests");
+    // add-dir is a variadic flag, so it uses --flag=value format
+    expect(result.args).toContain("--add-dir=./src");
+    expect(result.args).toContain("--add-dir=./tests");
 
     // Positional with mapping goes to positionals
     expect(result.positionals).toContain("--prompt");
@@ -1014,12 +1027,12 @@ describe("integration scenarios", () => {
       "/workspace"
     );
 
-    expect(result.args).toContain("--add-dir");
-    const addDirCount = result.args.filter(a => a === "--add-dir").length;
+    // add-dir is a variadic flag, so it uses --flag=value format
+    expect(result.args).toContain("--add-dir=./src");
+    expect(result.args).toContain("--add-dir=./lib");
+    expect(result.args).toContain("--add-dir=./tests");
+    const addDirCount = result.args.filter(a => a.startsWith("--add-dir=")).length;
     expect(addDirCount).toBe(3);
-    expect(result.args).toContain("./src");
-    expect(result.args).toContain("./lib");
-    expect(result.args).toContain("./tests");
     expect(result.args).toContain("--dangerously-skip-permissions");
   });
 
@@ -1203,10 +1216,10 @@ describe("dry-run consistency guarantee", () => {
     expect(spawnArgs).toContain("--prompt");
     expect(display).toContain("--prompt");
 
-    // Verify array flags are handled consistently
-    const addDirCount = spawnArgs.filter(a => a === "--add-dir").length;
+    // Verify array flags are handled consistently (variadic flags use --flag=value)
+    const addDirCount = spawnArgs.filter(a => a.startsWith("--add-dir=")).length;
     expect(addDirCount).toBe(2);
-    expect(display.split("--add-dir").length - 1).toBe(2);
+    expect(display.split("--add-dir=").length - 1).toBe(2);
 
     // Verify _env is separate (not in args)
     expect(spawnArgs).not.toContain("API_KEY");

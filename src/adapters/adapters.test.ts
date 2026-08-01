@@ -18,6 +18,11 @@ import { codexAdapter } from "./codex";
 import { geminiAdapter } from "./gemini";
 import { droidAdapter } from "./droid";
 import { opencodeAdapter } from "./opencode";
+import { piAdapter } from "./pi";
+import { cursorAgentAdapter } from "./cursor-agent";
+import { agyAdapter } from "./agy";
+import { grokAdapter } from "./grok";
+import { kimiAdapter } from "./kimi";
 import type { ToolAdapter, AgentFrontmatter } from "../types";
 
 describe("Tool Adapter Registry", () => {
@@ -44,6 +49,14 @@ describe("Tool Adapter Registry", () => {
 
     test("opencode adapter is registered", () => {
       expect(hasAdapter("opencode")).toBe(true);
+    });
+
+    test("grok adapter is registered", () => {
+      expect(hasAdapter("grok")).toBe(true);
+    });
+
+    test("kimi adapter is registered", () => {
+      expect(hasAdapter("kimi")).toBe(true);
     });
 
     test("getRegisteredAdapters returns all built-in adapters", () => {
@@ -153,6 +166,11 @@ describe("Claude Adapter", () => {
     const result = claudeAdapter.applyInteractiveMode(frontmatter);
     expect(result.model).toBe("opus");
     expect(result.verbose).toBe(true);
+  });
+
+  test("prepareEnv disables the print-mode background-task ceiling", () => {
+    const env = claudeAdapter.prepareEnv!();
+    expect(env).toEqual({ CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0" });
   });
 });
 
@@ -288,5 +306,133 @@ describe("Default Adapter", () => {
     expect(result).toEqual(frontmatter);
     // Ensure it's a copy, not the same object
     expect(result).not.toBe(frontmatter);
+  });
+});
+
+describe("pi Adapter (v3 default engine)", () => {
+  test("is registered", () => {
+    expect(hasAdapter("pi")).toBe(true);
+  });
+
+  test("has correct name", () => {
+    expect(piAdapter.name).toBe("pi");
+  });
+
+  test("getDefaults is print mode; hermetic set comes from the default-on isolation layer", () => {
+    expect(piAdapter.getDefaults()).toEqual({ print: true });
+    const isolation = piAdapter.getIsolationDefaults!();
+    expect(isolation["no-extensions"]).toBe(true);
+    expect(isolation["no-skills"]).toBe(true);
+    expect(isolation["no-prompt-templates"]).toBe(true);
+    expect(isolation["no-context-files"]).toBe(true);
+    expect(isolation["no-session"]).toBe(true);
+  });
+
+  test("applyInteractiveMode removes print but keeps isolation", () => {
+    const frontmatter: AgentFrontmatter = { print: true, "no-skills": true, model: "gpt-5.5" };
+    const result = piAdapter.applyInteractiveMode(frontmatter);
+    expect(result.print).toBeUndefined();
+    expect(result["no-skills"]).toBe(true);
+    expect(result.model).toBe("gpt-5.5");
+  });
+});
+
+describe("Cursor Agent Adapter", () => {
+  test("is registered", () => {
+    expect(hasAdapter("cursor-agent")).toBe(true);
+  });
+
+  test("has correct name", () => {
+    expect(cursorAgentAdapter.name).toBe("cursor-agent");
+  });
+
+  test("getDefaults uses print mode with text output", () => {
+    const defaults = cursorAgentAdapter.getDefaults();
+    expect(defaults.print).toBe(true);
+    expect(defaults["output-format"]).toBe("text");
+  });
+
+  test("applyInteractiveMode removes print and output-format", () => {
+    const frontmatter: AgentFrontmatter = { print: true, "output-format": "text", model: "sonnet-4" };
+    const result = cursorAgentAdapter.applyInteractiveMode(frontmatter);
+    expect(result.print).toBeUndefined();
+    expect(result["output-format"]).toBeUndefined();
+    expect(result.model).toBe("sonnet-4");
+  });
+});
+
+describe("agy (Antigravity) Adapter", () => {
+  test("is registered", () => {
+    expect(hasAdapter("agy")).toBe(true);
+  });
+
+  test("has correct name", () => {
+    expect(agyAdapter.name).toBe("agy");
+  });
+
+  test("getDefaults uses print mode", () => {
+    const defaults = agyAdapter.getDefaults();
+    expect(defaults.print).toBe(true);
+  });
+
+  test("applyInteractiveMode swaps print for prompt-interactive", () => {
+    const frontmatter: AgentFrontmatter = { print: true, model: "gemini-3.1-pro" };
+    const result = agyAdapter.applyInteractiveMode(frontmatter);
+    expect(result.print).toBeUndefined();
+    expect(result.$1).toBe("prompt-interactive");
+    expect(result.model).toBe("gemini-3.1-pro");
+  });
+});
+
+describe("Grok Adapter", () => {
+  test("has correct name", () => {
+    expect(grokAdapter.name).toBe("grok");
+  });
+
+  test("getDefaults maps body to --single (headless print)", () => {
+    expect(grokAdapter.getDefaults().$1).toBe("single");
+  });
+
+  test("applyInteractiveMode drops --single for a positional prompt", () => {
+    const result = grokAdapter.applyInteractiveMode({ $1: "single", model: "grok-4.5" });
+    expect(result.$1).toBeUndefined();
+    expect(result.model).toBe("grok-4.5");
+  });
+
+  test("isolation disables cross-session memory", () => {
+    expect(grokAdapter.getIsolationDefaults?.()["no-memory"]).toBe(true);
+  });
+
+  test("system prompt: replace → --system-prompt-override, append → --rules", () => {
+    const t = grokAdapter.applySystemPrompt!(
+      { replace: "Be terse", append: ["Cite sources", "Stay factual"] },
+      () => "unused",
+    );
+    expect(t.frontmatter?.["system-prompt-override"]).toBe("Be terse");
+    expect(t.frontmatter?.rules).toBe("Cite sources\n\nStay factual");
+  });
+});
+
+describe("Kimi Adapter", () => {
+  test("has correct name", () => {
+    expect(kimiAdapter.name).toBe("kimi");
+  });
+
+  test("getDefaults maps body to --prompt (non-interactive)", () => {
+    expect(kimiAdapter.getDefaults().$1).toBe("prompt");
+  });
+
+  test("applyInteractiveMode drops --prompt for a positional prompt", () => {
+    const result = kimiAdapter.applyInteractiveMode({ $1: "prompt", model: "kimi-k2" });
+    expect(result.$1).toBeUndefined();
+    expect(result.model).toBe("kimi-k2");
+  });
+
+  test("has no isolation controls (ambient, like droid)", () => {
+    expect(kimiAdapter.getIsolationDefaults).toBeUndefined();
+  });
+
+  test("has no system-prompt mechanism", () => {
+    expect(kimiAdapter.applySystemPrompt).toBeUndefined();
   });
 });

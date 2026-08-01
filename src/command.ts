@@ -5,12 +5,15 @@
  * Integrates with ProcessManager for centralized process lifecycle management
  */
 
-import type { AgentFrontmatter } from "./types";
-import { basename } from "path";
+import type { AgentFrontmatter, Adapter } from "./types";
+import { basename, resolve } from "path";
 import { teeToStdoutAndCollect, teeToStderrAndCollect, teeToStdoutWithMarkdownAndCollect } from "./stream";
 import { stopSpinner, isSpinnerRunning } from "./spinner";
 import { getProcessManager } from "./process-manager";
 import { createStreamingRenderer, type StreamingMarkdownRenderer } from "./markdown-renderer";
+import { getRegisteredAdapters, getPortableAdapter, getAdapter as getEngineAdapter, hasAdapter } from "./adapters";
+import { CommandError } from "./errors";
+import { escapeShellArg as escapeShellArgShared } from "./security";
 
 /**
  * Module-level reference to the current child process
@@ -86,9 +89,35 @@ const SYSTEM_KEYS = new Set([
   "_no-cache",
   "_no-menu", // Disable post-run action menu
 
-  // Command override
+  // Engine selection (v3 key + deprecated v2 aliases)
+  "engine",
   "_command",
   "_c",
+  "tool",
+  "_tool",
+
+  // Flow metadata (v3): human/roster-facing, never CLI flags. `description`
+  // is what marks a minimal file as a flow; `route` is reserved for keyword
+  // routing; `evolve` configures proposal-first post-run handling.
+  "description",
+  "route",
+  "evolve",
+
+  // Compatibility/version stamps (v3): written automatically at creation
+  // (`_mdflow_version`) and after successful runs (`_compat`); never flags.
+  "_mdflow_version",
+  "_flow_id",
+  "_compat",
+
+  // Isolation + system prompt (v3): consumed by mdflow and translated into
+  // engine-native flags/env by the adapter layer; never passed through.
+  "_isolated",
+  "_system-prompt",
+  "_append-system-prompt",
+
+  // Lifecycle hooks (v3): `_hooks` selects/disables the flow's hooks file;
+  // the adapter layer translates it into engine-native config. Never a flag.
+  "_hooks",
 ]);
 
 /**
@@ -99,43 +128,285 @@ function isPositionalKey(key: string): boolean {
 }
 
 /**
+ * Variadic flags that consume all following positional arguments.
+ * These must use --flag=value syntax to avoid eating the prompt.
+ */
+const VARIADIC_FLAGS = new Set([
+  "allowed-tools",
+  "allowedTools",
+  "disallowed-tools",
+  "disallowedTools",
+  "tools",
+  "add-dir",
+  "betas",
+  "mcp-config",
+  "plugin-dir",
+]);
+
+/**
  * Extract command from filename
  * e.g., "commit.claude.md" → "claude"
  * e.g., "task.gemini.md" → "gemini"
  * e.g., "fix.i.claude.md" → "claude" (with interactive mode)
+ * e.g., "chat.i.md" → undefined ("i" is the interactive marker, never an
+ * engine name — the default engine applies in interactive mode)
  */
 export function parseCommandFromFilename(filePath: string): string | undefined {
   const name = basename(filePath);
   // Match pattern: name.command.md or name.i.command.md
   const match = name.match(/\.([^.]+)\.md$/i);
-  return match?.[1];
+  const segment = match?.[1];
+  // Bare `.i.md` is the interactive marker with no engine segment.
+  if (segment?.toLowerCase() === "i") return undefined;
+  return segment;
 }
 
 /**
  * Check if filename has .i. marker for interactive mode
  * e.g., "fix.i.claude.md" → true
+ * e.g., "chat.i.md" → true (default engine, interactive)
  * e.g., "fix.claude.md" → false
  */
 export function hasInteractiveMarker(filePath: string): boolean {
   const name = basename(filePath);
-  // Match pattern: name.i.command.md
-  return /\.i\.[^.]+\.md$/i.test(name);
+  // Match pattern: name.i.command.md or name.i.md
+  return /\.i\.(?:[^.]+\.)?md$/i.test(name);
+}
+
+function validateResolvedCommand(
+  candidate: string,
+  source: "filename" | "frontmatter" | "env" | "config",
+  filePath: string
+): string {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    throw new CommandError(
+      `Unable to resolve command from "${source}" in "${filePath}". The command value is empty.`,
+      {
+        errorCode: "COMMAND_INVALID",
+        context: { filePath, source, suggestion: "Set --_command/--tool, rename to task.<tool>.md, or add frontmatter tool: <tool>." },
+      }
+    );
+  }
+
+  if (!isValidCommandToken(trimmed)) {
+    const didYouMean = formatDidYouMean(trimmed);
+    throw new CommandError(
+      `Invalid command "${trimmed}" from ${source} in "${filePath}".${didYouMean} ` +
+      "Use a command token with letters, numbers, dots, underscores, or hyphens.",
+      {
+        errorCode: "COMMAND_INVALID",
+        context: { filePath, command: trimmed, source },
+      }
+    );
+  }
+
+  return trimmed;
 }
 
 /**
- * Resolve command from filename pattern
- * Note: --_command flag is handled in index.ts before this is called
+ * The engine used when nothing else names one. pi is the flagship learnable
+ * engine (full event telemetry, subscription auth bridge), so it is the v3
+ * default; every other engine is one `engine:` line away.
  */
-export function resolveCommand(filePath: string): string {
-  const fromFilename = parseCommandFromFilename(filePath);
-  if (fromFilename) {
-    return fromFilename;
+export const DEFAULT_ENGINE = "pi";
+
+/** Which rung of the resolution ladder produced the engine. */
+export type EngineSource = "cli" | "env" | "filename" | "frontmatter" | "config" | "default";
+
+export interface ResolvedEngine {
+  engine: string;
+  source: EngineSource;
+  /** Set when the engine came from a deprecated frontmatter key. */
+  deprecatedKey?: "tool" | "_tool";
+  /**
+   * Set when the filename had an engine-shaped segment that names no known
+   * engine (no registered adapter, no binary on PATH) — e.g. report.final.md.
+   * The ladder fell through; callers should surface this so a typo like
+   * task.claud.md doesn't silently run on the default engine.
+   */
+  skippedFilenameEngine?: string;
+}
+
+/**
+ * A filename segment only claims the engine rung when it names something
+ * that can actually run: a registered adapter or a binary on PATH. This keeps
+ * v3's bare dotted filenames (report.final.md) from being misread as engines
+ * while .echo.md-style custom engines keep working.
+ */
+export function filenameEngineExists(candidate: string): boolean {
+  if (hasAdapter(candidate)) return true;
+  try {
+    return Bun.which(candidate) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the FILENAME names a real runnable engine (task.claude.md → true).
+ * A filename engine is an execution intent, so such a file is never a plain
+ * document — even when env/config overrides the actual engine choice.
+ */
+export function filenameNamesEngine(filePath: string): boolean {
+  const segment = parseCommandFromFilename(filePath)?.trim();
+  return Boolean(segment && isValidCommandToken(segment) && filenameEngineExists(segment));
+}
+
+/**
+ * Extract the engine from frontmatter. `engine:` is the v3 key; `tool:` and
+ * `_tool:` are deprecated v2 aliases (in that precedence order).
+ */
+export function parseEngineFromFrontmatter(
+  frontmatter: AgentFrontmatter
+): { engine: string; key: "engine" | "tool" | "_tool" } | undefined {
+  const engine = frontmatter.engine;
+  if (typeof engine === "string") return { engine, key: "engine" };
+
+  const tool = frontmatter.tool;
+  if (typeof tool === "string") return { engine: tool, key: "tool" };
+
+  const underscoreTool = frontmatter._tool;
+  if (typeof underscoreTool === "string") return { engine: underscoreTool, key: "_tool" };
+
+  return undefined;
+}
+
+/**
+ * @deprecated v3: use `parseEngineFromFrontmatter` (this reads only the
+ * legacy `tool:`/`_tool:` keys).
+ */
+export function parseCommandFromFrontmatter(frontmatter: AgentFrontmatter): string | undefined {
+  const tool = frontmatter.tool;
+  if (typeof tool === "string") return tool;
+
+  const underscoreTool = frontmatter._tool;
+  if (typeof underscoreTool === "string") return underscoreTool;
+
+  return undefined;
+}
+
+/**
+ * Resolve the engine for a flow file. The ladder, most explicit first:
+ *
+ * 1) `--engine` CLI flag        (handled upstream in cli-runner)
+ * 2) MDFLOW_ENGINE env var      ("run everything on X" override)
+ * 3) filename suffix            (`task.claude.md`)
+ * 4) frontmatter `engine:`      (aliases: deprecated `tool:`/`_tool:`)
+ * 5) config `engine:`           (project config beats ~/.mdflow/config.yaml)
+ * 6) built-in default           (DEFAULT_ENGINE)
+ *
+ * Resolution never fails for a missing engine — the default always applies.
+ * Callers decide what implicit resolution means (e.g. a frontmatter-less file
+ * resolved implicitly is a document, not a flow) and surface `source` to the
+ * user so defaults stay inspectable, never magic.
+ */
+export function resolveEngine(
+  filePath: string,
+  frontmatter?: AgentFrontmatter,
+  opts: { configEngine?: string; env?: Record<string, string | undefined> } = {}
+): ResolvedEngine {
+  const env = opts.env ?? process.env;
+
+  const fromEnv = env.MDFLOW_ENGINE;
+  if (typeof fromEnv === "string" && fromEnv.trim()) {
+    return { engine: validateResolvedCommand(fromEnv, "env", filePath), source: "env" };
   }
 
-  throw new Error(
-    "No command specified. Use --_command flag, " +
-    "or name your file like 'task.claude.md'"
+  const fromFilename = parseCommandFromFilename(filePath);
+  let skippedFilenameEngine: string | undefined;
+  if (fromFilename) {
+    // Filenames are names, not declarations — the segment only wins when it
+    // names a runnable engine; otherwise fall through (and report the skip so
+    // callers can warn about likely typos like task.claud.md).
+    if (isValidCommandToken(fromFilename.trim()) && filenameEngineExists(fromFilename.trim())) {
+      return { engine: fromFilename.trim(), source: "filename" };
+    }
+    skippedFilenameEngine = fromFilename;
+  }
+
+  const withSkip = (resolved: ResolvedEngine): ResolvedEngine =>
+    skippedFilenameEngine ? { ...resolved, skippedFilenameEngine } : resolved;
+
+  if (frontmatter) {
+    const fromFrontmatter = parseEngineFromFrontmatter(frontmatter);
+    if (fromFrontmatter) {
+      return withSkip({
+        engine: validateResolvedCommand(fromFrontmatter.engine, "frontmatter", filePath),
+        source: "frontmatter",
+        ...(fromFrontmatter.key === "engine" ? {} : { deprecatedKey: fromFrontmatter.key }),
+      });
+    }
+  }
+
+  if (typeof opts.configEngine === "string" && opts.configEngine.trim()) {
+    return withSkip({ engine: validateResolvedCommand(opts.configEngine, "config", filePath), source: "config" });
+  }
+
+  return withSkip({ engine: DEFAULT_ENGINE, source: "default" });
+}
+
+/**
+ * @deprecated v3: use `resolveEngine`, which also reports the resolution
+ * source. This wrapper keeps the engine-only signature and, unlike v2, never
+ * throws for a missing command — the default engine applies instead.
+ */
+export function resolveCommand(filePath: string, frontmatter?: AgentFrontmatter): string {
+  return resolveEngine(filePath, frontmatter).engine;
+}
+
+const VALID_COMMAND_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+function isValidCommandToken(command: string): boolean {
+  return VALID_COMMAND_TOKEN.test(command);
+}
+
+export function levenshteinDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp: number[][] = Array.from({ length: rows }, (_, i) =>
+    Array.from({ length: cols }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
   );
+
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i]![j] = Math.min(
+        dp[i - 1]![j]! + 1,
+        dp[i]![j - 1]! + 1,
+        dp[i - 1]![j - 1]! + cost
+      );
+    }
+  }
+
+  return dp[rows - 1]![cols - 1]!;
+}
+
+function getCommandSuggestions(command: string, max: number = 3): string[] {
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) return [];
+
+  const candidates = Array.from(new Set(getRegisteredAdapters().map((c) => c.toLowerCase())));
+  const ranked = candidates
+    .map((candidate) => ({ candidate, distance: levenshteinDistance(normalized, candidate) }))
+    .sort((a, b) => a.distance - b.distance || a.candidate.localeCompare(b.candidate));
+
+  const threshold = Math.max(2, Math.ceil(normalized.length * 0.4));
+  return ranked
+    .filter(({ candidate, distance }) =>
+      candidate.startsWith(normalized) ||
+      normalized.startsWith(candidate) ||
+      distance <= threshold
+    )
+    .slice(0, max)
+    .map(({ candidate }) => candidate);
+}
+
+function formatDidYouMean(command: string): string {
+  const suggestions = getCommandSuggestions(command);
+  if (suggestions.length === 0) return "";
+  if (suggestions.length === 1) return `Did you mean '${suggestions[0]}'?`;
+  return `Did you mean one of: ${suggestions.map((s) => `'${s}'`).join(", ")}?`;
 }
 
 /**
@@ -153,7 +424,7 @@ function toFlag(key: string): string {
  * Build CLI args from frontmatter
  * Each key becomes a flag, values become arguments
  */
-export function buildArgs(
+function buildGenericArgs(
   frontmatter: AgentFrontmatter,
   templateVars: Set<string>
 ): string[] {
@@ -187,16 +458,58 @@ export function buildArgs(
     // Array → repeat flag for each value
     if (Array.isArray(value)) {
       for (const v of value) {
-        args.push(toFlag(key), String(v));
+        // Variadic flags need --flag=value syntax to not eat following args
+        if (VARIADIC_FLAGS.has(key)) {
+          args.push(`${toFlag(key)}=${String(v)}`);
+        } else {
+          args.push(toFlag(key), String(v));
+        }
       }
       continue;
     }
 
     // String/number → flag with value
-    args.push(toFlag(key), String(value));
+    // Variadic flags need --flag=value syntax to not eat following args
+    if (VARIADIC_FLAGS.has(key)) {
+      const strValue = String(value);
+      // Split comma-separated values for variadic flags
+      // Handle both "Read,Edit" and "Bash(git commit:*), Bash(git add:*)"
+      const parts = strValue.includes(", ")
+        ? strValue.split(", ")  // Split on ", " (comma + space)
+        : strValue.includes(",")
+          ? strValue.split(",")  // Split on just ","
+          : [strValue];          // No commas, single value
+      for (const part of parts) {
+        args.push(`${toFlag(key)}=${part.trim()}`);
+      }
+    } else {
+      args.push(toFlag(key), String(value));
+    }
   }
 
   return args;
+}
+
+/**
+ * Resolve portable adapter for a command/provider.
+ */
+export function getAdapter(command: string): Adapter | undefined {
+  if (!command) return undefined;
+  return getPortableAdapter(command);
+}
+
+export function buildArgs(
+  frontmatter: AgentFrontmatter,
+  templateVars: Set<string>,
+  command?: string
+): string[] {
+  const adapter = command ? getAdapter(command) : undefined;
+  if (!adapter) {
+    return buildGenericArgs(frontmatter, templateVars);
+  }
+
+  const normalized = adapter.normalizeFrontmatter(frontmatter);
+  return adapter.buildArgs(normalized, templateVars, buildGenericArgs);
 }
 
 /**
@@ -236,8 +549,10 @@ export function extractEnvVars(frontmatter: AgentFrontmatter): Record<string, st
  * - "none": Inherit stdout/stderr, no capture (streaming to terminal)
  * - "capture": Pipe and buffer output, print after completion
  * - "tee": Tee streams - simultaneous display and capture (best of both)
+ * - "stream": Pipe and deliver chunks to ctx.onOutput as they arrive; never
+ *   writes to the terminal (used by --events NDJSON runs)
  */
-export type CaptureMode = "none" | "capture" | "tee";
+export type CaptureMode = "none" | "capture" | "tee" | "stream";
 
 export interface RunContext {
   /** The command to execute */
@@ -267,6 +582,37 @@ export interface RunContext {
    * Default: false (render markdown with syntax highlighting)
    */
   rawOutput?: boolean;
+  /** Optional hard runtime bound for maintenance/helper commands. */
+  timeoutMs?: number;
+  /** Optional working directory for the spawned command. */
+  cwd?: string;
+  /** Whether the engine process must receive an adapter-owned isolation lease. */
+  isolated?: boolean;
+  /**
+   * Absolute path to the flow being run, used to classify whether it belongs
+   * to the project it is running in. Unset = treated as visiting.
+   */
+  flowPath?: string;
+  /** Capture without replaying captured streams to the terminal. */
+  silentCapture?: boolean;
+  /**
+   * Run a terminal UI. Interactive engines must inherit all terminal streams;
+   * piping even one output stream makes tools such as Codex reject the launch.
+   */
+  interactive?: boolean;
+  /**
+   * Deliberate consent for a NESTED engine run (a run started from inside
+   * another mdflow-launched engine session). Set only by the CLI-consumed
+   * --_allow-nested flag — never from flow frontmatter or the environment.
+   */
+  allowNested?: boolean;
+  /**
+   * Called with each output chunk as it arrives (mode "stream" only).
+   * stderr chunks are delivered only when captureStderr is enabled.
+   */
+  onOutput?: (channel: "stdout" | "stderr", text: string) => void;
+  /** Called with the child pid immediately after a successful spawn. */
+  onSpawn?: (pid: number) => void;
 }
 
 export interface RunResult {
@@ -275,6 +621,7 @@ export interface RunResult {
   stdout: string;
   /** Captured stderr content (empty string if not capturing stderr) */
   stderr: string;
+  timedOut?: boolean;
   /**
    * @deprecated Use `stdout` instead. Kept for backward compatibility.
    */
@@ -292,6 +639,56 @@ function normalizeCaptureMode(mode: boolean | CaptureMode): CaptureMode {
   return mode;
 }
 
+export interface CommandStdioPolicy {
+  stdin: "inherit" | "ignore";
+  stdout: "inherit" | "pipe";
+  stderr: "inherit" | "pipe";
+}
+
+export function resolveCommandStdio(options: {
+  mode: CaptureMode;
+  captureStderr: boolean;
+  spinnerActive: boolean;
+  interactive: boolean;
+}): CommandStdioPolicy {
+  if (options.interactive) {
+    return { stdin: "inherit", stdout: "inherit", stderr: "inherit" };
+  }
+
+  const capturing =
+    options.mode === "capture" || options.mode === "tee" || options.mode === "stream";
+  const shouldPipeStdout = capturing || options.spinnerActive;
+  const shouldPipeStderr = capturing && options.captureStderr;
+  return {
+    // Print-mode engines never read the parent's stdin: piped input is
+    // consumed by mdflow itself and delivered via {{ _stdin }}. Passing an
+    // open stdin through makes engines that poll it (codex exec prints
+    // "Reading additional input from stdin..." and waits for EOF) hang
+    // headless runs until the parent's stdin closes.
+    stdin: "ignore",
+    stdout: shouldPipeStdout ? "pipe" : "inherit",
+    stderr: shouldPipeStderr ? "pipe" : "inherit",
+  };
+}
+
+function hasNullByte(value: string): boolean {
+  return value.includes("\0");
+}
+
+/**
+ * Escape a CLI argument for shell-safe display in logs/previews.
+ * This is display-only; process execution always uses argv arrays.
+ */
+export function escapeShellArg(arg: string): string {
+  return escapeShellArgShared(arg, process.platform === "win32" ? "win32" : "posix");
+}
+
+function formatSpawnPreview(command: string, args: string[]): string {
+  return [command, ...args]
+    .map((arg) => escapeShellArg(arg))
+    .join(" ");
+}
+
 /**
  * Execute command with positional arguments
  * Positionals are either passed as-is or mapped to flags via $N mappings
@@ -306,16 +703,37 @@ function normalizeCaptureMode(mode: boolean | CaptureMode): CaptureMode {
  * - Use rawOutput: true (--raw flag) to bypass rendering for piping
  */
 export async function runCommand(ctx: RunContext): Promise<RunResult> {
-  const { command, args, positionals, positionalMappings, captureOutput, env, captureStderr = false, rawOutput = false } = ctx;
+  const { command, args, positionals, positionalMappings, captureOutput, env, captureStderr = false, rawOutput = false, interactive = false } = ctx;
 
-  const mode = normalizeCaptureMode(captureOutput);
+  const mode = interactive ? "none" : normalizeCaptureMode(captureOutput);
+  const normalizedCommand = command.trim();
+
+  if (!normalizedCommand) {
+    console.error("Command not found: empty command value.");
+    console.error("Use --_command <tool> or name your file like task.<tool>.md.");
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
+
+  if (!isValidCommandToken(normalizedCommand)) {
+    const didYouMean = formatDidYouMean(normalizedCommand);
+    console.error(`Invalid command token: '${normalizedCommand}'.`);
+    if (didYouMean) {
+      console.error(didYouMean);
+    }
+    console.error("Use a command/binary name without spaces. Example: --_command claude");
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
 
   // Pre-flight check: verify the command exists
-  const binaryPath = Bun.which(command);
+  const binaryPath = Bun.which(normalizedCommand);
   if (!binaryPath) {
-    console.error(`Command not found: '${command}'`);
-    console.error(`This agent requires '${command}' to be installed and available in your PATH.`);
-    console.error(`Please install it and try again.`);
+    const didYouMean = formatDidYouMean(normalizedCommand);
+    console.error(`Command not found: '${normalizedCommand}'`);
+    if (didYouMean) {
+      console.error(didYouMean);
+    }
+    console.error(`This agent requires '${normalizedCommand}' to be installed and available in your PATH.`);
+    console.error("Install it, or override with --_command <installed-binary>.");
     // Return empty process-like object for backward compatibility
     return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
   }
@@ -339,30 +757,166 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     }
   }
 
-  // Merge process.env with provided env
-  const runEnv = env
-    ? { ...process.env, ...env }
-    : undefined;
+  const invalidArgIndex = finalArgs.findIndex(hasNullByte);
+  if (invalidArgIndex !== -1) {
+    console.error(
+      `Rejected command argument at index ${invalidArgIndex}: null bytes are not allowed in spawned process arguments.`
+    );
+    return { exitCode: 127, stdout: "", stderr: "", output: "", process: null as unknown as ReturnType<typeof Bun.spawn> };
+  }
+
+  // Engine adapters may contribute env vars (e.g. pi's bridged auth dir).
+  // Precedence: adapter vars < process.env < explicit ctx.env — an adapter
+  // never overrides something the user already set.
+  let adapterEnv: Record<string, string> | undefined;
+  // NOTE: command.ts exports its own getAdapter (the portable-key layer), so
+  // the registry lookup is imported under a distinct name.
+  const engineAdapter = getEngineAdapter(normalizedCommand);
+  if (engineAdapter.prepareEnv) {
+    try {
+      adapterEnv = engineAdapter.prepareEnv();
+    } catch (err) {
+      console.error(`Warning [ADAPTER_ENV]: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const spawnCwd = resolve(ctx.cwd ?? process.cwd());
+  let preparedIsolation:
+    | import("./types").PreparedIsolationEnvironment
+    | undefined;
+  if (ctx.isolated && engineAdapter.prepareIsolationEnv) {
+    try {
+      preparedIsolation = engineAdapter.prepareIsolationEnv({
+        mode: "spawn",
+        cwd: spawnCwd,
+        interactive,
+        flowPath: ctx.flowPath,
+      });
+    } catch (err) {
+      // The cause carries the only actionable detail (which path, which fix).
+      // Dropping it left users with a generic line and a log that stopped at
+      // "Executing command", so it is folded into the message itself.
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new CommandError(
+        `Codex isolation preparation failed; no engine process was started. ${detail}`,
+        {
+          errorCode: "ISOLATION_PREPARATION_FAILED",
+          context: { command: normalizedCommand },
+          cause: err,
+        },
+      );
+    }
+    for (const warning of preparedIsolation?.warnings ?? []) {
+      console.error(`Warning [ISOLATION]: ${warning}`);
+    }
+  }
+
+  // Merge process.env with provided env. MDFLOW_CONFIG_CWD is mdflow's
+  // internal parent→child config pointer for eval children; the ENGINE (and
+  // everything it spawns — hooks, nested md runs) must never inherit it, or
+  // it would load the outer flow's project config instead of its own.
+  const runEnv: Record<string, string | undefined> = { ...adapterEnv, ...process.env, ...env };
+  delete runEnv.MDFLOW_CONFIG_CWD;
+  for (const key of preparedIsolation?.unsetEnv ?? []) delete runEnv[key];
+  Object.assign(runEnv, preparedIsolation?.env ?? {});
+  // Recursion boundary: an engine session spawned by mdflow injects
+  // MDFLOW_ACTIVE_FLOW into its child env, so a nested `md` invocation from
+  // inside that session (agent shell tools, inline commands) can be detected
+  // here. A nested ENGINE run is REJECTED by default — it would spend
+  // another paid invocation without a new user consent boundary. The only
+  // override is the CLI-consumed --_allow-nested flag (ctx.allowNested);
+  // flow frontmatter _env can never grant it. Ordinary shell pipelines
+  // (`md plan.md | md build.md`) are unaffected: siblings spawned by the
+  // user's shell never inherit an engine child's marker.
+  if (process.env.MDFLOW_ACTIVE_FLOW && !ctx.allowNested) {
+    throw new CommandError(
+      "Nested flow run rejected (NESTED_FLOW): this engine run was started " +
+        "from inside another mdflow-launched session. Recursive flow " +
+        "handoff spends another engine invocation without a new consent " +
+        "boundary. If this nesting is deliberate, re-run with " +
+        "--_allow-nested.",
+      { errorCode: "NESTED_FLOW", context: { command: normalizedCommand } },
+    );
+  }
+  runEnv.MDFLOW_ACTIVE_FLOW = "1";
 
   // Determine stdout/stderr pipe config based on mode
   // When spinner is running, we need to pipe stdout to detect first output
-  const spinnerActive = isSpinnerRunning();
-  const shouldPipeStdout = mode === "capture" || mode === "tee" || spinnerActive;
-  const shouldPipeStderr = (mode === "capture" || mode === "tee") && captureStderr;
+  const spinnerActive = !interactive && isSpinnerRunning();
+  if (interactive) stopSpinner();
+  const stdio = resolveCommandStdio({ mode, captureStderr, spinnerActive, interactive });
 
-  const proc = Bun.spawn([command, ...finalArgs], {
-    stdout: shouldPipeStdout ? "pipe" : "inherit",
-    stderr: shouldPipeStderr ? "pipe" : "inherit",
-    stdin: "inherit",
-    env: runEnv,
-  });
+  const spawnEngineProcess = () =>
+    Bun.spawn([normalizedCommand, ...finalArgs], {
+      ...stdio,
+      env: runEnv,
+      cwd: spawnCwd,
+      detached: process.platform !== "win32",
+    });
+  let proc: ReturnType<typeof spawnEngineProcess>;
+  try {
+    proc = spawnEngineProcess();
+  } catch (err) {
+    try {
+      await preparedIsolation?.cleanup?.();
+    } catch (cleanupError) {
+      throw new CommandError(
+        "Codex isolation cleanup failed after the engine could not start.",
+        {
+          errorCode: "ISOLATION_CLEANUP_FAILED",
+          context: { command: normalizedCommand },
+          cause: cleanupError,
+        },
+      );
+    }
+    // The OS rejects oversized argv with a bare "E2BIG" — translate it: the
+    // prompt (body + expanded imports) travels to the engine as a CLI
+    // argument, so there is a hard OS ceiling (~1MB total on macOS/Linux).
+    if ((err as NodeJS.ErrnoException)?.code === "E2BIG" || /E2BIG/.test(String(err))) {
+      const argBytes = finalArgs.reduce((sum, a) => sum + Buffer.byteLength(a) + 1, 0);
+      throw new CommandError(
+        `Prompt too large to pass to the engine (PROMPT_TOO_LARGE): the resolved ` +
+          `arguments total ~${Math.round(argBytes / 1024)}KB, above the OS argv limit. ` +
+          `Trim whatever inflated the prompt — the flow body, imports ` +
+          `(globs like @./src/**/* are the usual cause), or piped {{ _stdin }} input.`,
+        { errorCode: "PROMPT_TOO_LARGE", context: { command: normalizedCommand, argBytes } },
+      );
+    }
+    throw err;
+  }
+
+  let primaryFailure: unknown;
+  try {
+  const killTree = (signal: NodeJS.Signals) => {
+    if (process.platform !== "win32") {
+      try { process.kill(-proc.pid, signal); return; } catch {}
+    }
+    try { proc.kill(signal); } catch {}
+  };
+
+  let timedOut = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = ctx.timeoutMs && ctx.timeoutMs > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        try {
+          killTree("SIGTERM");
+          killTimer = setTimeout(() => {
+            killTree("SIGKILL");
+          }, 2_000);
+        } catch {}
+      }, ctx.timeoutMs)
+    : undefined;
 
   // Register with ProcessManager for centralized lifecycle management
   const pm = getProcessManager();
-  pm.register(proc, command);
+  pm.register(proc, formatSpawnPreview(normalizedCommand, finalArgs));
 
   // Store reference for legacy signal handling (deprecated)
   currentChildProcess = proc;
+
+  preparedIsolation?.onSpawn?.(proc.pid);
+  ctx.onSpawn?.(proc.pid);
 
   let stdout = "";
   let stderr = "";
@@ -372,6 +926,9 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
 
   // Handle output based on mode
   if (mode === "tee") {
+    // Stop spinner before streaming output starts
+    stopSpinner();
+
     // Tee mode: stream to console while capturing (with markdown rendering)
     const promises: Promise<void>[] = [];
 
@@ -383,7 +940,7 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
       );
     }
 
-    if (proc.stderr && shouldPipeStderr) {
+    if (proc.stderr && stdio.stderr === "pipe") {
       promises.push(
         teeToStderrAndCollect(proc.stderr).then((content) => {
           stderr = content;
@@ -392,20 +949,67 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     }
 
     await Promise.all(promises);
+  } else if (mode === "stream") {
+    // Stream mode: deliver chunks to the caller as they arrive while
+    // accumulating the full text. Nothing is written to the terminal.
+    stopSpinner();
+    const readStream = async (
+      stream: ReadableStream<Uint8Array>,
+      channel: "stdout" | "stderr"
+    ): Promise<string> => {
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        if (!text) continue;
+        accumulated += text;
+        ctx.onOutput?.(channel, text);
+      }
+      const tail = decoder.decode();
+      if (tail) {
+        accumulated += tail;
+        ctx.onOutput?.(channel, tail);
+      }
+      return accumulated;
+    };
+
+    const streamPromises: Promise<void>[] = [];
+    if (proc.stdout) {
+      streamPromises.push(
+        readStream(proc.stdout, "stdout").then((content) => {
+          stdout = content;
+        })
+      );
+    }
+    if (proc.stderr && stdio.stderr === "pipe") {
+      streamPromises.push(
+        readStream(proc.stderr, "stderr").then((content) => {
+          stderr = content;
+        })
+      );
+    }
+    await Promise.all(streamPromises);
   } else if (mode === "capture") {
+    // Stop spinner before reading output
+    stopSpinner();
+
     // Capture mode: buffer then print (with markdown rendering)
     if (proc.stdout) {
       stdout = await new Response(proc.stdout).text();
-      // Render and print to console so user sees it
-      const rendered = markdownRenderer.processChunk(stdout);
-      const final = markdownRenderer.flush();
-      console.log(rendered + final);
+      if (!ctx.silentCapture) {
+        // Render and print to console so user sees it
+        const rendered = markdownRenderer.processChunk(stdout);
+        const final = markdownRenderer.flush();
+        console.log(rendered + final);
+      }
     }
 
-    if (proc.stderr && shouldPipeStderr) {
+    if (proc.stderr && stdio.stderr === "pipe") {
       stderr = await new Response(proc.stderr).text();
-      // Print stderr to console (no markdown rendering for stderr)
-      console.error(stderr);
+      if (!ctx.silentCapture) console.error(stderr);
     }
   } else if (spinnerActive && proc.stdout) {
     // Spinner mode: stream to stdout with markdown rendering, stop spinner on first output
@@ -439,6 +1043,8 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
   // mode === "none" without spinner: stdout/stderr are inherited, nothing to capture
 
   const exitCode = await proc.exited;
+  if (timeout) clearTimeout(timeout);
+  if (killTimer) clearTimeout(killTimer);
 
   // Ensure spinner is stopped (in case process exited without output)
   stopSpinner();
@@ -450,7 +1056,29 @@ export async function runCommand(ctx: RunContext): Promise<RunResult> {
     exitCode,
     stdout,
     stderr,
+    timedOut,
     output: stdout, // backward compatibility
     process: proc,
   };
+  } catch (err) {
+    primaryFailure = err;
+    throw err;
+  } finally {
+    try {
+      await preparedIsolation?.cleanup?.();
+    } catch (cleanupError) {
+      throw new CommandError(
+        "Codex isolation cleanup failed; the run home could not be securely disposed.",
+        {
+          errorCode: "ISOLATION_CLEANUP_FAILED",
+          context: {
+            command: normalizedCommand,
+            childFailure:
+              primaryFailure instanceof Error ? primaryFailure.message : undefined,
+          },
+          cause: cleanupError,
+        },
+      );
+    }
+  }
 }

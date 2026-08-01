@@ -12,8 +12,13 @@
  */
 
 import { basename } from "path";
+import { hasAdapter } from "./adapters";
 
-/** Supported command aliases */
+/**
+ * Built-in engines always accepted as md.COMMAND aliases. Beyond this list,
+ * any registered adapter or PATH binary works, mirroring the filename rung
+ * of the engine ladder (md.echo, md.pi, md.agy all resolve).
+ */
 export const SUPPORTED_COMMANDS = [
   "claude",
   "codex",
@@ -21,9 +26,24 @@ export const SUPPORTED_COMMANDS = [
   "copilot",
   "droid",
   "opencode",
+  "pi",
+  "cursor-agent",
+  "agy",
+  "grok",
+  "kimi",
 ] as const;
 
-export type SupportedCommand = typeof SUPPORTED_COMMANDS[number];
+export type SupportedCommand = string;
+
+function isRunnableEngine(cmd: string): boolean {
+  if ((SUPPORTED_COMMANDS as readonly string[]).includes(cmd)) return true;
+  if (hasAdapter(cmd)) return true;
+  try {
+    return Bun.which(cmd) !== null;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Result of parsing an ad-hoc command invocation
@@ -49,10 +69,26 @@ export interface AdhocCommandResult {
  * @param argv - The process.argv array
  * @returns The parsed ad-hoc command result
  */
-export function detectAdhocCommand(argv: string[]): AdhocCommandResult {
+export function detectAdhocCommand(
+  argv: string[],
+  invokedAs?: string
+): AdhocCommandResult {
   // argv[0] is the runtime (node/bun), argv[1] is the script/command
   // For symlinks: argv[1] might be "md.claude"
   // For bun run: argv[1] might be the full path to index.ts
+  // The node launcher (bin/mdflow.mjs) erases both names when it bridges to
+  // bun, so it forwards the original executable name via MDFLOW_INVOKED_AS.
+
+  if (invokedAs) {
+    const forwarded = parseAdhocFromName(basename(invokedAs));
+    if (forwarded.isAdhoc) {
+      return parseAdhocArgs(
+        forwarded.command!,
+        forwarded.interactive ?? false,
+        argv.slice(2)
+      );
+    }
+  }
 
   // Check argv[1] first (the command/script name)
   const scriptName = argv[1] ? basename(argv[1]) : "";
@@ -85,19 +121,19 @@ function parseAdhocFromName(name: string): { isAdhoc: boolean; command?: Support
   const cleanName = name.replace(/\.(ts|js|mjs|cjs)$/, "");
 
   // Pattern: md.i.COMMAND (interactive mode)
-  const interactiveMatch = cleanName.match(/^md\.i\.([a-z]+)$/i);
+  const interactiveMatch = cleanName.match(/^md\.i\.([a-z][a-z0-9-]*)$/i);
   if (interactiveMatch) {
-    const cmd = interactiveMatch[1]?.toLowerCase() as SupportedCommand;
-    if (SUPPORTED_COMMANDS.includes(cmd)) {
+    const cmd = interactiveMatch[1]!.toLowerCase();
+    if (isRunnableEngine(cmd)) {
       return { isAdhoc: true, command: cmd, interactive: true };
     }
   }
 
   // Pattern: md.COMMAND
-  const match = cleanName.match(/^md\.([a-z]+)$/i);
+  const match = cleanName.match(/^md\.([a-z][a-z0-9-]*)$/i);
   if (match) {
-    const cmd = match[1]?.toLowerCase() as SupportedCommand;
-    if (SUPPORTED_COMMANDS.includes(cmd)) {
+    const cmd = match[1]!.toLowerCase();
+    if (isRunnableEngine(cmd)) {
       return { isAdhoc: true, command: cmd, interactive: false };
     }
   }

@@ -205,9 +205,40 @@ describe("SUPPORTED_COMMANDS", () => {
     expect(SUPPORTED_COMMANDS).toContain("copilot");
     expect(SUPPORTED_COMMANDS).toContain("droid");
     expect(SUPPORTED_COMMANDS).toContain("opencode");
+    expect(SUPPORTED_COMMANDS).toContain("pi");
+    expect(SUPPORTED_COMMANDS).toContain("cursor-agent");
+    expect(SUPPORTED_COMMANDS).toContain("agy");
   });
 
-  it("has exactly 6 supported commands", () => {
-    expect(SUPPORTED_COMMANDS.length).toBe(6);
+  it("has exactly 11 built-in commands (registry/PATH engines extend beyond)", () => {
+    expect(SUPPORTED_COMMANDS.length).toBe(11);
+  });
+
+  it("includes the grok and kimi engines", () => {
+    expect(SUPPORTED_COMMANDS).toContain("grok");
+    expect(SUPPORTED_COMMANDS).toContain("kimi");
+  });
+});
+
+describe("invokedAs forwarding (node launcher bridge)", () => {
+  it("detects the ad-hoc form from MDFLOW_INVOKED_AS when argv names are generic", () => {
+    // Chaos regression (2026-07-17): bin/mdflow.mjs spawns `bun <entry>`,
+    // erasing the md.echo executable name from argv — the advertised
+    // `md.COMMAND "prompt"` form silently fell through to flow lookup.
+    const result = detectAdhocCommand(
+      ["bun", "/repo/src/index.ts", "just say hi"],
+      "md.echo"
+    );
+    expect(result.isAdhoc).toBe(true);
+    expect(result.command).toBe("echo");
+    expect(result.body).toBe("just say hi");
+  });
+
+  it("ignores a non-adhoc forwarded name", () => {
+    const result = detectAdhocCommand(
+      ["bun", "/repo/src/index.ts", "file.md"],
+      "mdflow"
+    );
+    expect(result.isAdhoc).toBe(false);
   });
 });

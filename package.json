@@ -1,6 +1,7 @@
 {
   "name": "mdflow",
-  "version": "2.35.0",
+  "version": "4.9.0",
+  "license": "MIT",
   "module": "src/index.ts",
   "type": "module",
   "repository": {
@@ -8,27 +9,35 @@
     "url": "https://github.com/johnlindquist/mdflow.git"
   },
   "bin": {
-    "mdflow": "./src/index.ts",
-    "md": "./src/index.ts",
-    "md.claude": "./src/index.ts",
-    "md.codex": "./src/index.ts",
-    "md.gemini": "./src/index.ts",
-    "md.copilot": "./src/index.ts",
-    "md.droid": "./src/index.ts",
-    "md.opencode": "./src/index.ts",
-    "md.i.claude": "./src/index.ts",
-    "md.i.codex": "./src/index.ts",
-    "md.i.gemini": "./src/index.ts",
-    "md.i.copilot": "./src/index.ts",
-    "md.i.droid": "./src/index.ts",
-    "md.i.opencode": "./src/index.ts"
+    "mdflow": "./bin/mdflow.mjs",
+    "md": "./src/index.ts"
   },
+  "files": [
+    "bin",
+    "src",
+    "!src/**/*.test.ts",
+    "assets",
+    "skills",
+    "docs/public-api.md",
+    "docs/evolve.md",
+    "README.md"
+  ],
   "scripts": {
     "test": "bun test --bail=1",
+    "typecheck": "bunx tsc -p tsconfig.json --noEmit",
+    "package:check": "bun run scripts/package-smoke.ts",
+    "verify": "bun run typecheck && bun test && bun run facts:check && bun run guidance:check && bun run package:check",
+    "postversion": "bun run facts && bun run guidance",
     "md": "bun run src/index.ts",
     "bundle": "bun run scripts/bundle.ts -o",
     "bundle:core": "bun run scripts/bundle.ts --core -o",
-    "bundle:stdout": "bun run scripts/bundle.ts"
+    "bundle:stdout": "bun run scripts/bundle.ts",
+    "facts": "bun run scripts/generate-facts.ts",
+    "facts:check": "bun run scripts/generate-facts.ts --check",
+    "guidance": "bun run scripts/generate-agent-guidance.ts",
+    "guidance:check": "bun run scripts/generate-agent-guidance.ts --check",
+    "verify:codex-isolation": "bun test src/adapters/codex-hooks-home.test.ts src/isolation.test.ts src/command.test.ts src/cli-runner.test.ts src/hooks-integration.test.ts src/isolation-integration.test.ts && bun run typecheck",
+    "probe:codex-isolation": "bun run scripts/probe-codex-isolation.ts"
   },
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",

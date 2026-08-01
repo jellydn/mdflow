@@ -1,6 +1,8 @@
-import { expect, test, describe } from "bun:test";
-import { parseCommandFromFilename, resolveCommand, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, runCommand, type CaptureMode } from "./command";
+import { expect, test, describe, spyOn, beforeEach, afterEach } from "bun:test";
+import { parseCommandFromFilename, hasInteractiveMarker, resolveCommand, resolveEngine, DEFAULT_ENGINE, buildArgs, extractPositionalMappings, extractEnvVars, getCurrentChildProcess, killCurrentChildProcess, resolveCommandStdio, runCommand, type CaptureMode } from "./command";
 import type { AgentFrontmatter } from "./types";
+import { CommandError } from "./errors";
+import { registerAdapter } from "./adapters";
 
 describe("parseCommandFromFilename", () => {
   test("extracts command from filename pattern", () => {
@@ -23,6 +25,33 @@ describe("parseCommandFromFilename", () => {
     expect(parseCommandFromFilename("task.CLAUDE.md")).toBe("CLAUDE");
     expect(parseCommandFromFilename("task.Claude.MD")).toBe("Claude");
   });
+
+  test("bare .i.md is the interactive marker, never an engine named i", () => {
+    expect(parseCommandFromFilename("chat.i.md")).toBeUndefined();
+    expect(parseCommandFromFilename("chat.I.md")).toBeUndefined();
+    expect(parseCommandFromFilename("/path/to/chat.i.md")).toBeUndefined();
+    // The marker before an engine segment still yields the engine.
+    expect(parseCommandFromFilename("fix.i.claude.md")).toBe("claude");
+  });
+});
+
+describe("hasInteractiveMarker", () => {
+  test("detects .i. with an engine segment", () => {
+    expect(hasInteractiveMarker("fix.i.claude.md")).toBe(true);
+    expect(hasInteractiveMarker("fix.claude.md")).toBe(false);
+  });
+
+  test("detects bare .i.md (default engine, interactive)", () => {
+    expect(hasInteractiveMarker("chat.i.md")).toBe(true);
+    expect(hasInteractiveMarker("/path/to/chat.I.MD")).toBe(true);
+  });
+
+  test("never matches lookalike names", () => {
+    expect(hasInteractiveMarker("i.md")).toBe(false);
+    expect(hasInteractiveMarker("info.md")).toBe(false);
+    expect(hasInteractiveMarker("task.iq.md")).toBe(false);
+    expect(hasInteractiveMarker("task.md")).toBe(false);
+  });
 });
 
 describe("resolveCommand", () => {
@@ -31,8 +60,132 @@ describe("resolveCommand", () => {
     expect(resolveCommand("review.gemini.md")).toBe("gemini");
   });
 
-  test("throws when no command can be resolved", () => {
-    expect(() => resolveCommand("task.md")).toThrow("No command specified");
+  test("falls back to the default engine instead of throwing (v3)", () => {
+    expect(resolveCommand("task.md")).toBe(DEFAULT_ENGINE);
+  });
+});
+
+describe("resolveCommandStdio", () => {
+  test("interactive engines inherit every terminal stream even when capture was requested", () => {
+    expect(resolveCommandStdio({
+      mode: "tee",
+      captureStderr: true,
+      spinnerActive: true,
+      interactive: true,
+    })).toEqual({
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+  });
+
+  test("one-shot engines retain tee capture behavior", () => {
+    expect(resolveCommandStdio({
+      mode: "tee",
+      captureStderr: true,
+      spinnerActive: false,
+      interactive: false,
+    })).toEqual({
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  });
+
+  test("print-mode engines never see the parent's stdin (codex exec would wait for EOF)", () => {
+    expect(resolveCommandStdio({
+      mode: "none",
+      captureStderr: false,
+      spinnerActive: false,
+      interactive: false,
+    }).stdin).toBe("ignore");
+  });
+});
+
+describe("resolveEngine ladder", () => {
+  const noEnv = { env: {} };
+
+  test("defaults to DEFAULT_ENGINE when nothing names an engine", () => {
+    const resolved = resolveEngine("task.md", undefined, noEnv);
+    expect(resolved.engine).toBe(DEFAULT_ENGINE);
+    expect(resolved.source).toBe("default");
+  });
+
+  test("config engine beats the built-in default", () => {
+    const resolved = resolveEngine("task.md", undefined, { ...noEnv, configEngine: "claude" });
+    expect(resolved).toEqual({ engine: "claude", source: "config" });
+  });
+
+  test("frontmatter engine: beats config", () => {
+    const resolved = resolveEngine("task.md", { engine: "codex" }, { ...noEnv, configEngine: "claude" });
+    expect(resolved).toEqual({ engine: "codex", source: "frontmatter" });
+  });
+
+  test("filename beats frontmatter", () => {
+    const resolved = resolveEngine("task.claude.md", { engine: "codex" }, noEnv);
+    expect(resolved).toEqual({ engine: "claude", source: "filename" });
+  });
+
+  test("MDFLOW_ENGINE env var beats filename", () => {
+    const resolved = resolveEngine("task.claude.md", undefined, { env: { MDFLOW_ENGINE: "codex" } });
+    expect(resolved).toEqual({ engine: "codex", source: "env" });
+  });
+
+  test("deprecated tool: alias resolves but is flagged", () => {
+    const resolved = resolveEngine("task.md", { tool: "claude" }, noEnv);
+    expect(resolved).toEqual({ engine: "claude", source: "frontmatter", deprecatedKey: "tool" });
+  });
+
+  test("deprecated _tool: alias resolves but is flagged", () => {
+    const resolved = resolveEngine("task.md", { _tool: "claude" }, noEnv);
+    expect(resolved).toEqual({ engine: "claude", source: "frontmatter", deprecatedKey: "_tool" });
+  });
+
+  test("engine: beats deprecated aliases without a deprecation flag", () => {
+    const resolved = resolveEngine("task.md", { engine: "codex", tool: "claude" }, noEnv);
+    expect(resolved).toEqual({ engine: "codex", source: "frontmatter" });
+  });
+
+  test("invalid engine tokens still throw typed errors", () => {
+    expect(() => resolveEngine("task.md", { engine: "cl aude!" }, noEnv)).toThrow(CommandError);
+    expect(() => resolveEngine("task.md", undefined, { env: { MDFLOW_ENGINE: "no/slashes here" } })).toThrow(
+      CommandError
+    );
+  });
+
+  test("filename engine wins only when it names a runnable engine", () => {
+    // Registered adapter: wins.
+    expect(resolveEngine("t.claude.md", undefined, noEnv)).toEqual({ engine: "claude", source: "filename" });
+    // PATH binary that is not a registered adapter: wins (custom engines).
+    expect(resolveEngine("t.echo.md", undefined, noEnv)).toEqual({ engine: "echo", source: "filename" });
+  });
+
+  test("unknown filename engine falls through and is reported", () => {
+    const resolved = resolveEngine("report.nonexistent-command-xyz.md", undefined, noEnv);
+    expect(resolved.engine).toBe(DEFAULT_ENGINE);
+    expect(resolved.source).toBe("default");
+    expect(resolved.skippedFilenameEngine).toBe("nonexistent-command-xyz");
+
+    // Frontmatter still wins over the skipped filename, and the skip is kept.
+    const withFm = resolveEngine("report.nonexistent-command-xyz.md", { engine: "claude" }, noEnv);
+    expect(withFm.engine).toBe("claude");
+    expect(withFm.skippedFilenameEngine).toBe("nonexistent-command-xyz");
+  });
+
+  test("blank env and config values are ignored", () => {
+    const resolved = resolveEngine("task.md", undefined, { env: { MDFLOW_ENGINE: "  " }, configEngine: "" });
+    expect(resolved.source).toBe("default");
+  });
+
+  test("bare .i.md never reads as an engine and never reports a skip", () => {
+    const resolved = resolveEngine("chat.i.md", undefined, noEnv);
+    expect(resolved.engine).toBe(DEFAULT_ENGINE);
+    expect(resolved.source).toBe("default");
+    expect(resolved.skippedFilenameEngine).toBeUndefined();
+
+    // Frontmatter and config still outrank the default.
+    expect(resolveEngine("chat.i.md", { engine: "claude" }, noEnv).source).toBe("frontmatter");
+    expect(resolveEngine("chat.i.md", undefined, { ...noEnv, configEngine: "claude" }).source).toBe("config");
   });
 });
 
@@ -53,8 +206,47 @@ describe("buildArgs", () => {
   });
 
   test("handles arrays by repeating flags", () => {
+    // Non-variadic arrays use space-separated format
+    const result = buildArgs({ "include": ["./src", "./tests"] }, new Set());
+    expect(result).toEqual(["--include", "./src", "--include", "./tests"]);
+  });
+
+  test("variadic flags use = syntax to avoid eating positional args", () => {
+    // add-dir is a variadic flag, so it uses --flag=value format
     const result = buildArgs({ "add-dir": ["./src", "./tests"] }, new Set());
-    expect(result).toEqual(["--add-dir", "./src", "--add-dir", "./tests"]);
+    expect(result).toEqual(["--add-dir=./src", "--add-dir=./tests"]);
+  });
+
+  test("variadic allowed-tools string uses = syntax", () => {
+    const result = buildArgs({ "allowed-tools": "Bash(git status:*)" }, new Set());
+    expect(result).toEqual(["--allowed-tools=Bash(git status:*)"]);
+  });
+
+  test("variadic allowed-tools array produces multiple --flag= entries", () => {
+    const result = buildArgs({ "allowed-tools": ["Read", "Edit", "Bash(git:*)"] }, new Set());
+    expect(result).toEqual([
+      "--allowed-tools=Read",
+      "--allowed-tools=Edit",
+      "--allowed-tools=Bash(git:*)"
+    ]);
+  });
+
+  test("variadic allowed-tools comma-separated string splits into multiple flags", () => {
+    const result = buildArgs({ "allowed-tools": "Read,Edit,Bash" }, new Set());
+    expect(result).toEqual([
+      "--allowed-tools=Read",
+      "--allowed-tools=Edit",
+      "--allowed-tools=Bash"
+    ]);
+  });
+
+  test("variadic allowed-tools comma-space-separated string splits correctly", () => {
+    // Handle tool patterns with spaces like Bash(git commit:*)
+    const result = buildArgs({ "allowed-tools": "Bash(git commit:*), Bash(git add:*)" }, new Set());
+    expect(result).toEqual([
+      "--allowed-tools=Bash(git commit:*)",
+      "--allowed-tools=Bash(git add:*)"
+    ]);
   });
 
   test("skips system keys (_inputs)", () => {
@@ -318,5 +510,131 @@ describe("runCommand capture modes", () => {
 
     expect(result.exitCode).toBe(42);
     expect(result.stdout.trim()).toBe("before exit");
+  });
+});
+
+describe("runCommand timeout containment", () => {
+  test("kills the process group so grandchildren cannot write after timeout", async () => {
+    if (process.platform === "win32") return;
+    const { mkdtempSync, existsSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "mdflow-timeout-"));
+    const marker = join(dir, "late-write");
+    try {
+      const result = await runCommand({
+        command: "sh",
+        args: ["-c"],
+        positionals: [`(sleep 0.4; touch '${marker}') & wait`],
+        positionalMappings: new Map(),
+        captureOutput: true,
+        captureStderr: true,
+        silentCapture: true,
+        timeoutMs: 50,
+      });
+      expect(result.timedOut).toBe(true);
+      await Bun.sleep(600);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("disposes an isolation lease only after the timed-out child exits", async () => {
+    if (process.platform === "win32") return;
+    const {
+      existsSync,
+      mkdirSync,
+      mkdtempSync,
+      rmSync,
+    } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "mdflow-isolation-timeout-"));
+    const home = join(dir, "lease-home");
+    const childExited = join(dir, "child-exited");
+    const command = "sh";
+
+    let cleanupSawExitedChild = false;
+    registerAdapter({
+      name: command,
+      getDefaults: () => ({}),
+      applyInteractiveMode: (frontmatter) => frontmatter,
+      prepareIsolationEnv: () => {
+        mkdirSync(home);
+        return {
+          env: { LEASE_HOME: home, CHILD_EXITED: childExited },
+          cleanup: () => {
+            cleanupSawExitedChild = existsSync(childExited);
+            rmSync(home, { recursive: true, force: true });
+          },
+        };
+      },
+    });
+
+    try {
+      const result = await runCommand({
+        command,
+        args: [
+          "-c",
+          `trap 'touch "$CHILD_EXITED"; exit 0' TERM; while :; do sleep 1; done`,
+        ],
+        positionals: [],
+        positionalMappings: new Map(),
+        captureOutput: true,
+        captureStderr: true,
+        silentCapture: true,
+        timeoutMs: 50,
+        isolated: true,
+      });
+      expect(result.timedOut).toBe(true);
+      expect(cleanupSawExitedChild).toBe(true);
+      expect(existsSync(home)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runCommand command suggestions", () => {
+  let consoleErrorSpy: ReturnType<typeof spyOn>;
+  let capturedErrors: string[] = [];
+
+  beforeEach(() => {
+    capturedErrors = [];
+    consoleErrorSpy = spyOn(console, "error").mockImplementation((msg: string) => {
+      capturedErrors.push(msg);
+    });
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  test("shows did-you-mean suggestion for close command typo", async () => {
+    const result = await runCommand({
+      command: "claud",
+      args: [],
+      positionals: [],
+      positionalMappings: new Map(),
+      captureOutput: false,
+    });
+
+    expect(result.exitCode).toBe(127);
+    expect(capturedErrors.some((line) => line.includes("Did you mean 'claude'?"))).toBe(true);
+  });
+});
+
+describe("flow metadata keys are never CLI flags (v3)", () => {
+  test("description, route, and stable flow id are consumed while real flags pass", () => {
+    const args = buildArgs(
+      { description: "review staged changes", route: "review|diff", _flow_id: "flow_123", model: "gpt-5.5" } as AgentFrontmatter,
+      new Set(),
+      "codex"
+    );
+    expect(args).not.toContain("--description");
+    expect(args).not.toContain("--route");
+    expect(args).not.toContain("--_flow-id");
+    expect(args).toContain("--model");
   });
 });

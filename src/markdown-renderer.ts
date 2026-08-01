@@ -166,8 +166,13 @@ export class StreamingMarkdownRenderer {
     const completeContent = this.buffer.slice(0, paragraphBreak + 2);
     this.buffer = this.buffer.slice(paragraphBreak + 2);
 
-    // Render the complete blocks
-    return renderMarkdown(completeContent);
+    // Render the complete blocks. renderMarkdown trims the trailing
+    // newlines marked adds, so restore the block separator here — without
+    // it the NEXT render (later chunk or final flush) is glued directly
+    // onto this one ("## Why Speed MattersAI is getting faster." on real
+    // engine output).
+    const rendered = renderMarkdown(completeContent);
+    return rendered ? `${rendered}\n\n` : "";
   }
 }
 

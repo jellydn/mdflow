@@ -20,6 +20,14 @@ export function stripShebang(content: string): string {
 export interface RawParsedMarkdown {
   frontmatter: unknown;
   body: string;
+  /**
+   * The file opens with a `---` fence that is never closed. Raw parsing
+   * stays lenient (passive surfaces still inspect the file), but execution
+   * paths must refuse: the "body" here is the entire file, YAML-ish config
+   * lines included, and sending that to an engine as the prompt is never
+   * what the author meant.
+   */
+  unclosedFrontmatter?: boolean;
 }
 
 /**
@@ -36,14 +44,17 @@ export function parseRawFrontmatter(content: string): RawParsedMarkdown {
 
   let endIndex = -1;
   for (let i = 1; i < lines.length; i++) {
-    if (lines[i]?.trim() === "---") {
+    const line = lines[i] ?? "";
+    // Frontmatter fences are document delimiters only at column zero.
+    // Indented `---` lines are valid content inside YAML block scalars.
+    if (line.startsWith("---") && line.trim() === "---") {
       endIndex = i;
       break;
     }
   }
 
   if (endIndex === -1) {
-    return { frontmatter: {}, body: content };
+    return { frontmatter: {}, body: content, unclosedFrontmatter: true };
   }
 
   const frontmatterYaml = lines.slice(1, endIndex).join("\n");
@@ -66,7 +77,14 @@ export function parseRawFrontmatter(content: string): RawParsedMarkdown {
  * Uses js-yaml for robust parsing and zod for validation
  */
 export function parseFrontmatter(content: string): ParsedMarkdown {
-  const { frontmatter: raw, body } = parseRawFrontmatter(content);
+  const { frontmatter: raw, body, unclosedFrontmatter } = parseRawFrontmatter(content);
+
+  if (unclosedFrontmatter) {
+    throw new Error(
+      "Frontmatter opens with '---' on the first line but the closing '---' fence is missing. " +
+        "Close the frontmatter block, or remove the opening fence if this file is a plain document."
+    );
+  }
 
   // Handle empty frontmatter
   if (raw === null || raw === undefined || (typeof raw === 'object' && Object.keys(raw as object).length === 0)) {

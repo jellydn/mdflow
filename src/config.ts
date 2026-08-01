@@ -49,9 +49,10 @@ import { homedir } from "os";
 import { join, dirname, resolve } from "path";
 import { existsSync, statSync } from "fs";
 import yaml from "js-yaml";
-import type { AgentFrontmatter, GlobalConfig, CommandDefaults, RunContext } from "./types";
+import type { AgentFrontmatter, GlobalConfig, CommandDefaults } from "./types";
 import { getAdapter, buildBuiltinDefaults } from "./adapters";
 import { safeParseConfig } from "./schema";
+import { ConfigError, getErrorMessage } from "./errors";
 
 // Re-export types for convenience
 export type { GlobalConfig, CommandDefaults } from "./types";
@@ -60,7 +61,11 @@ const CONFIG_DIR = join(homedir(), ".mdflow");
 const CONFIG_FILE = join(CONFIG_DIR, "config.yaml");
 
 /** Project config file names (checked in order) */
-const PROJECT_CONFIG_NAMES = ["mdflow.config.yaml", ".mdflow.yaml", ".mdflow.json"];
+const PROJECT_CONFIG_NAMES = [
+	"mdflow.config.yaml",
+	".mdflow.yaml",
+	".mdflow.json",
+];
 
 /**
  * Built-in defaults (used when no config file exists)
@@ -69,50 +74,58 @@ const PROJECT_CONFIG_NAMES = ["mdflow.config.yaml", ".mdflow.yaml", ".mdflow.jso
  * Generated dynamically from registered tool adapters
  */
 export const BUILTIN_DEFAULTS: GlobalConfig = {
-  commands: buildBuiltinDefaults(),
+	commands: buildBuiltinDefaults(),
 };
 
+/** Resolve whether frontmatter or an external marker requests a terminal UI. */
+export function isInteractiveModeEnabled(
+	frontmatter: AgentFrontmatter,
+	interactiveFromExternal: boolean = false,
+): boolean {
+	// Check if _interactive or _i is enabled
+	// Can be: true, empty string (YAML key with no value), null (YAML key with explicit null), or external trigger
+	// NOTE: We check key existence separately because ?? treats null as "nullish" and skips to next value
+	const hasInteractiveKey = "_interactive" in frontmatter;
+	const hasIKey = "_i" in frontmatter;
+	const interactiveValue = hasInteractiveKey
+		? frontmatter._interactive
+		: frontmatter._i;
+	return (
+		interactiveFromExternal ||
+		interactiveValue === true ||
+		interactiveValue === "" ||
+		(hasInteractiveKey && interactiveValue === null) ||
+		(hasIKey && interactiveValue === null) ||
+		(interactiveValue !== undefined && interactiveValue !== false)
+	);
+}
+
 /**
- * Apply _interactive mode transformations to frontmatter
- * Converts print defaults to interactive mode per command
- *
- * Uses the tool adapter registry to delegate tool-specific transformations.
- *
- * @param frontmatter - The frontmatter after defaults are applied
- * @param command - The resolved command name
- * @param interactiveFromFilename - Whether .i. was detected in filename
- * @returns Transformed frontmatter for interactive mode
+ * Apply _interactive mode transformations to frontmatter.
+ * Converts print defaults to interactive mode through the engine adapter.
  */
 export function applyInteractiveMode(
-  frontmatter: AgentFrontmatter,
-  command: string,
-  interactiveFromExternal: boolean = false
+	frontmatter: AgentFrontmatter,
+	command: string,
+	interactiveFromExternal: boolean = false,
 ): AgentFrontmatter {
-  // Check if _interactive or _i is enabled
-  // Can be: true, empty string (YAML key with no value), null (YAML key with explicit null), or external trigger
-  // NOTE: We check key existence separately because ?? treats null as "nullish" and skips to next value
-  const hasInteractiveKey = "_interactive" in frontmatter;
-  const hasIKey = "_i" in frontmatter;
-  const interactiveValue = hasInteractiveKey ? frontmatter._interactive : frontmatter._i;
-  const interactiveMode = interactiveFromExternal ||
-    interactiveValue === true ||
-    interactiveValue === "" ||
-    (hasInteractiveKey && interactiveValue === null) ||
-    (hasIKey && interactiveValue === null) ||
-    (interactiveValue !== undefined && interactiveValue !== false);
+	const interactiveMode = isInteractiveModeEnabled(
+		frontmatter,
+		interactiveFromExternal,
+	);
 
-  if (!interactiveMode) {
-    return frontmatter;
-  }
+	if (!interactiveMode) {
+		return frontmatter;
+	}
 
-  // Remove _interactive and _i from output (they're meta-keys, not CLI flags)
-  const result = { ...frontmatter };
-  delete result._interactive;
-  delete result._i;
+	// Remove _interactive and _i from output (they're meta-keys, not CLI flags)
+	const result = { ...frontmatter };
+	delete result._interactive;
+	delete result._i;
 
-  // Delegate to the appropriate tool adapter for tool-specific transformations
-  const adapter = getAdapter(command);
-  return adapter.applyInteractiveMode(result);
+	// Delegate to the appropriate tool adapter for tool-specific transformations
+	const adapter = getAdapter(command);
+	return adapter.applyInteractiveMode(result);
 }
 
 // NOTE: Module-level caching has been removed to enable parallel testing.
@@ -126,28 +139,53 @@ export function applyInteractiveMode(
  * @returns The git root path, or null if not in a git repo
  */
 export function findGitRoot(startPath: string): string | null {
-  let current = resolve(startPath);
-  let previous = "";
+	let current = resolve(startPath);
+	let previous = "";
 
-  // Walk up until we hit the filesystem root (when dirname returns the same path)
-  while (current !== previous) {
-    const gitPath = join(current, ".git");
-    if (existsSync(gitPath)) {
-      // Check if .git is a directory (normal repo) or file (worktree)
-      try {
-        const stat = statSync(gitPath);
-        if (stat.isDirectory() || stat.isFile()) {
-          return current;
-        }
-      } catch {
-        // Continue searching if stat fails
-      }
-    }
-    previous = current;
-    current = dirname(current);
-  }
+	// Walk up until we hit the filesystem root (when dirname returns the same path)
+	while (current !== previous) {
+		const gitPath = join(current, ".git");
+		try {
+			if (existsSync(gitPath)) {
+				// Check if .git is a directory (normal repo) or file (worktree)
+				try {
+					const stat = statSync(gitPath);
+					if (stat.isDirectory() || stat.isFile()) {
+						return current;
+					}
+				} catch (err) {
+					throw new ConfigError(
+						`Failed to inspect git marker "${gitPath}" while discovering project config scope.`,
+						{
+							errorCode: "CONFIG_FILE_DISCOVERY_FAILED",
+							context: {
+								gitPath,
+								currentPath: current,
+								suggestion:
+									"Check directory permissions or run from a readable working directory.",
+							},
+							cause: err,
+						},
+					);
+				}
+			}
+		} catch (err) {
+			if (err instanceof ConfigError) throw err;
+			throw new ConfigError(`Failed to check git marker path "${gitPath}".`, {
+				errorCode: "CONFIG_FILE_DISCOVERY_FAILED",
+				context: {
+					gitPath,
+					currentPath: current,
+					suggestion: "Ensure parent directories are accessible.",
+				},
+				cause: err,
+			});
+		}
+		previous = current;
+		current = dirname(current);
+	}
 
-  return null;
+	return null;
 }
 
 /**
@@ -156,13 +194,33 @@ export function findGitRoot(startPath: string): string | null {
  * @returns The config file path if found, null otherwise
  */
 function findProjectConfigFile(dir: string): string | null {
-  for (const name of PROJECT_CONFIG_NAMES) {
-    const configPath = join(dir, name);
-    if (existsSync(configPath)) {
-      return configPath;
-    }
-  }
-  return null;
+	for (const name of PROJECT_CONFIG_NAMES) {
+		const configPath = join(dir, name);
+		try {
+			if (existsSync(configPath)) {
+				return configPath;
+			}
+		} catch (err) {
+			throw new ConfigError(
+				`Failed while checking config path "${configPath}".`,
+				{
+					errorCode: "CONFIG_FILE_DISCOVERY_FAILED",
+					context: {
+						directory: dir,
+						configPath,
+						suggestion:
+							"Check directory permissions and ensure the path is accessible.",
+					},
+					cause: err,
+				},
+			);
+		}
+	}
+	return null;
+}
+
+function formatConfigWarning(err: ConfigError): string {
+	return `Warning [${err.errorCode}]: ${err.message}`;
 }
 
 /**
@@ -171,41 +229,109 @@ function findProjectConfigFile(dir: string): string | null {
  *
  * @param filePath - Path to the config file
  * @param throwOnInvalid - If true, throws on validation errors; if false, logs warning and returns null
+ * @param quiet - If true, suppresses the warning log (secondary readers that
+ *   must not double-report errors the primary load path already surfaces)
  * @returns Validated config or null if file doesn't exist or is invalid
  */
-async function loadConfigFile(filePath: string, throwOnInvalid: boolean = false): Promise<GlobalConfig | null> {
-  try {
-    const file = Bun.file(filePath);
-    if (!await file.exists()) {
-      return null;
-    }
-    const content = await file.text();
+async function loadConfigFile(
+	filePath: string,
+	throwOnInvalid: boolean = false,
+	quiet: boolean = false,
+): Promise<GlobalConfig | null> {
+	const file = Bun.file(filePath);
+	let exists = false;
 
-    let parsed: unknown;
-    if (filePath.endsWith(".json")) {
-      parsed = JSON.parse(content);
-    } else {
-      parsed = yaml.load(content);
-    }
+	try {
+		exists = await file.exists();
+	} catch (err) {
+		const wrapped = new ConfigError(
+			`Unable to access config file "${filePath}".`,
+			{
+				errorCode: "CONFIG_FILE_READ_FAILED",
+				context: {
+					filePath,
+					suggestion:
+						"Ensure the file path is valid and readable by your current user.",
+				},
+				cause: err,
+			},
+		);
+		if (throwOnInvalid) throw wrapped;
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
+		return null;
+	}
 
-    // Validate with Zod schema
-    const validation = safeParseConfig(parsed);
-    if (!validation.success) {
-      const errorMsg = `Invalid config file ${filePath}:\n  ${validation.errors?.join("\n  ")}`;
-      if (throwOnInvalid) {
-        throw new Error(errorMsg);
-      }
-      console.warn(`Warning: ${errorMsg}`);
-      return null;
-    }
+	if (!exists) {
+		return null;
+	}
 
-    return validation.data as GlobalConfig;
-  } catch (err) {
-    if (throwOnInvalid) throw err;
-    // Log parse errors instead of failing silently
-    console.warn(`Warning: Failed to parse config file ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
-  }
+	let content = "";
+	try {
+		content = await file.text();
+	} catch (err) {
+		const wrapped = new ConfigError(
+			`Failed to read config file "${filePath}".`,
+			{
+				errorCode: "CONFIG_FILE_READ_FAILED",
+				context: {
+					filePath,
+					suggestion:
+						"Check file permissions (e.g. chmod 644) and verify the file is not locked.",
+				},
+				cause: err,
+			},
+		);
+		if (throwOnInvalid) throw wrapped;
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
+		return null;
+	}
+
+	let parsed: unknown;
+	try {
+		if (filePath.endsWith(".json")) {
+			parsed = JSON.parse(content);
+		} else {
+			parsed = yaml.load(content);
+		}
+	} catch (err) {
+		const wrapped = new ConfigError(
+			`Failed to parse config file "${filePath}".`,
+			{
+				errorCode: "CONFIG_FILE_PARSE_FAILED",
+				context: {
+					filePath,
+					suggestion: filePath.endsWith(".json")
+						? "Validate JSON syntax (trailing commas and quote mismatches are common)."
+						: "Validate YAML syntax and indentation.",
+				},
+				cause: err,
+			},
+		);
+		if (throwOnInvalid) throw wrapped;
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
+		return null;
+	}
+
+	// Validate with Zod schema
+	const validation = safeParseConfig(parsed);
+	if (!validation.success) {
+		const wrapped = new ConfigError(
+			`Invalid config file "${filePath}". ${validation.errors?.join("; ")}`,
+			{
+				errorCode: "CONFIG_FILE_VALIDATION_FAILED",
+				context: {
+					filePath,
+					suggestion:
+						"Run `md setup` to regenerate defaults, then merge your custom values.",
+				},
+			},
+		);
+		if (throwOnInvalid) throw wrapped;
+		if (!quiet) console.warn(formatConfigWarning(wrapped));
+		return null;
+	}
+
+	return validation.data as GlobalConfig;
 }
 
 /**
@@ -216,31 +342,57 @@ async function loadConfigFile(filePath: string, throwOnInvalid: boolean = false)
  * store the result in RunContext.config.
  */
 export async function loadProjectConfig(cwd: string): Promise<GlobalConfig> {
-  const resolvedCwd = resolve(cwd);
-  let projectConfig: GlobalConfig = {};
+	const resolvedCwd = resolve(cwd);
+	let projectConfig: GlobalConfig = {};
 
-  // 1. Load from git root (if different from CWD)
-  const gitRoot = findGitRoot(resolvedCwd);
-  if (gitRoot && gitRoot !== resolvedCwd) {
-    const gitRootConfigFile = findProjectConfigFile(gitRoot);
-    if (gitRootConfigFile) {
-      const gitRootConfig = await loadConfigFile(gitRootConfigFile);
-      if (gitRootConfig) {
-        projectConfig = gitRootConfig;
-      }
-    }
-  }
+	// 1. Load from git root (if different from CWD)
+	const gitRoot = findGitRoot(resolvedCwd);
+	if (gitRoot && gitRoot !== resolvedCwd) {
+		const gitRootConfigFile = findProjectConfigFile(gitRoot);
+		if (gitRootConfigFile) {
+			const gitRootConfig = await loadConfigFile(gitRootConfigFile);
+			if (gitRootConfig) {
+				projectConfig = gitRootConfig;
+			}
+		}
+	}
 
-  // 2. Load from CWD (overrides git root)
-  const cwdConfigFile = findProjectConfigFile(resolvedCwd);
-  if (cwdConfigFile) {
-    const cwdConfig = await loadConfigFile(cwdConfigFile);
-    if (cwdConfig) {
-      projectConfig = mergeConfigs(projectConfig, cwdConfig);
-    }
-  }
+	// 2. Load from CWD (overrides git root)
+	const cwdConfigFile = findProjectConfigFile(resolvedCwd);
+	if (cwdConfigFile) {
+		const cwdConfig = await loadConfigFile(cwdConfigFile);
+		if (cwdConfig) {
+			projectConfig = mergeConfigs(projectConfig, cwdConfig);
+		}
+	}
 
-  return projectConfig;
+	return projectConfig;
+}
+
+export interface EffectiveConfigFile {
+	role: "global" | "gitRoot" | "project";
+	path: string;
+}
+
+/**
+ * Absolute paths of every config file whose contents feed
+ * `loadFullConfig(cwd)`, in precedence order (global → git root → cwd).
+ * Used by eval fingerprinting to bind receipts to the exact config bytes,
+ * not just their parsed shape.
+ */
+export function listEffectiveConfigFiles(cwd: string): EffectiveConfigFile[] {
+	const files: EffectiveConfigFile[] = [];
+	if (existsSync(CONFIG_FILE))
+		files.push({ role: "global", path: CONFIG_FILE });
+	const resolvedCwd = resolve(cwd);
+	const gitRoot = findGitRoot(resolvedCwd);
+	if (gitRoot && gitRoot !== resolvedCwd) {
+		const gitRootFile = findProjectConfigFile(gitRoot);
+		if (gitRootFile) files.push({ role: "gitRoot", path: gitRootFile });
+	}
+	const cwdFile = findProjectConfigFile(resolvedCwd);
+	if (cwdFile) files.push({ role: "project", path: cwdFile });
+	return files;
 }
 
 /**
@@ -253,32 +405,170 @@ export async function loadProjectConfig(cwd: string): Promise<GlobalConfig> {
  * Always returns a fresh copy to ensure isolation between callers.
  */
 export async function loadGlobalConfig(): Promise<GlobalConfig> {
-  try {
-    const file = Bun.file(CONFIG_FILE);
-    if (await file.exists()) {
-      const content = await file.text();
-      const parsed = yaml.load(content) as GlobalConfig;
-      // Merge with built-in defaults (user config takes priority)
-      return mergeConfigs(BUILTIN_DEFAULTS, parsed);
-    }
-  } catch (err) {
-    // Log error and fall back to built-in defaults
-    console.warn(`Warning: Failed to load global config ${CONFIG_FILE}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  // Return a deep clone to ensure callers get an independent copy
-  return mergeConfigs(BUILTIN_DEFAULTS, {});
+	const file = Bun.file(CONFIG_FILE);
+	let exists = false;
+
+	try {
+		exists = await file.exists();
+	} catch (err) {
+		const wrapped = new ConfigError(
+			`Failed to access global config "${CONFIG_FILE}".`,
+			{
+				errorCode: "CONFIG_FILE_READ_FAILED",
+				context: {
+					filePath: CONFIG_FILE,
+					suggestion:
+						"Check your home directory permissions and that ~/.mdflow is readable.",
+				},
+				cause: err,
+			},
+		);
+		console.warn(formatConfigWarning(wrapped));
+		return mergeConfigs(BUILTIN_DEFAULTS, {});
+	}
+
+	if (!exists) {
+		return mergeConfigs(BUILTIN_DEFAULTS, {});
+	}
+
+	try {
+		const content = await file.text();
+		const parsed = yaml.load(content);
+		const validation = safeParseConfig(parsed);
+		if (!validation.success) {
+			const wrapped = new ConfigError(
+				`Global config "${CONFIG_FILE}" is invalid. ${validation.errors?.join("; ")}`,
+				{
+					errorCode: "CONFIG_FILE_VALIDATION_FAILED",
+					context: {
+						filePath: CONFIG_FILE,
+						suggestion:
+							"Fix the listed keys, or temporarily move the file and rerun `md setup`.",
+					},
+				},
+			);
+			console.warn(formatConfigWarning(wrapped));
+			return mergeConfigs(BUILTIN_DEFAULTS, {});
+		}
+
+		// Merge with built-in defaults (user config takes priority)
+		return mergeConfigs(BUILTIN_DEFAULTS, validation.data as GlobalConfig);
+	} catch (err) {
+		const wrapped = new ConfigError(
+			`Failed to parse global config "${CONFIG_FILE}": ${getErrorMessage(err)}`,
+			{
+				errorCode: "CONFIG_FILE_PARSE_FAILED",
+				context: {
+					filePath: CONFIG_FILE,
+					suggestion:
+						"Validate YAML syntax and indentation in ~/.mdflow/config.yaml.",
+				},
+				cause: err,
+			},
+		);
+		console.warn(formatConfigWarning(wrapped));
+	}
+
+	// Return a deep clone to ensure callers get an independent copy
+	return mergeConfigs(BUILTIN_DEFAULTS, {});
 }
 
 /**
  * Load fully merged config: built-in defaults → global → git root → CWD
  * This is the main entry point for loading config with project-level overrides
  */
-export async function loadFullConfig(cwd: string = process.cwd()): Promise<GlobalConfig> {
-  const globalConfig = await loadGlobalConfig();
-  const projectConfig = await loadProjectConfig(cwd);
+export async function loadFullConfig(
+	cwd: string = process.cwd(),
+): Promise<GlobalConfig> {
+	const globalConfig = await loadGlobalConfig();
+	const projectConfig = await loadProjectConfig(cwd);
 
-  // Merge: global → project (project takes priority)
-  return mergeConfigs(globalConfig, projectConfig);
+	// Merge: global → project (project takes priority)
+	return mergeConfigs(globalConfig, projectConfig);
+}
+
+/**
+ * Strict, silent config load for machine diagnostics. Every effective file is
+ * parsed with errors enabled; unlike the normal interactive loader this never
+ * logs a warning and silently falls back.
+ */
+export async function loadFullConfigStrict(
+	cwd: string = process.cwd(),
+): Promise<GlobalConfig> {
+	let config = mergeConfigs(BUILTIN_DEFAULTS, {});
+	for (const { path } of listEffectiveConfigFiles(cwd)) {
+		const loaded = await loadConfigFile(path, true);
+		if (loaded) config = mergeConfigs(config, loaded);
+	}
+	return config;
+}
+
+export interface DeclaredFlowDirectories {
+	/** Directories declared by ~/.mdflow/config.yaml — scanned as global flows. */
+	global: string[];
+	/** Directories declared by project config files — scanned as project flows. */
+	project: string[];
+}
+
+function expandConfigDirectory(
+	entry: string,
+	base: string,
+	homeDir: string,
+): string {
+	const expanded =
+		entry === "~"
+			? homeDir
+			: entry.startsWith("~/") || entry.startsWith("~\\")
+				? join(homeDir, entry.slice(2))
+				: entry;
+	return resolve(base, expanded);
+}
+
+/**
+ * Extra roster directories declared via `flows.directories`, resolved to
+ * absolute paths per declaring scope. The merged `loadFullConfig` view cannot
+ * answer this: global declarations are global flows while project
+ * declarations are project flows, and merging erases that provenance.
+ * Relative entries resolve against the directory of the file that declares
+ * them (the global config resolves against ~/.mdflow itself).
+ */
+export async function getDeclaredFlowDirectories(
+	options: { cwd?: string; homeDir?: string } = {},
+): Promise<DeclaredFlowDirectories> {
+	const cwd = resolve(options.cwd ?? process.cwd());
+	const homeDir = resolve(options.homeDir ?? homedir());
+	const result: DeclaredFlowDirectories = { global: [], project: [] };
+
+	// Quiet: the primary config load path owns warning about broken config;
+	// this secondary read must not double-report (doctor/roster JSON purity).
+	const globalBase = join(homeDir, ".mdflow");
+	const globalConfig = await loadConfigFile(
+		join(globalBase, "config.yaml"),
+		false,
+		true,
+	);
+	for (const entry of globalConfig?.flows?.directories ?? []) {
+		result.global.push(expandConfigDirectory(entry, globalBase, homeDir));
+	}
+
+	const projectFiles: Array<{ path: string; base: string }> = [];
+	const gitRoot = findGitRoot(cwd);
+	if (gitRoot && gitRoot !== cwd) {
+		const gitRootFile = findProjectConfigFile(gitRoot);
+		if (gitRootFile) projectFiles.push({ path: gitRootFile, base: gitRoot });
+	}
+	const cwdFile = findProjectConfigFile(cwd);
+	if (cwdFile) projectFiles.push({ path: cwdFile, base: cwd });
+	for (const { path, base } of projectFiles) {
+		const projectConfig = await loadConfigFile(path, false, true);
+		for (const entry of projectConfig?.flows?.directories ?? []) {
+			result.project.push(expandConfigDirectory(entry, base, homeDir));
+		}
+	}
+
+	result.global = [...new Set(result.global)];
+	result.project = [...new Set(result.project)];
+	return result;
 }
 
 /**
@@ -286,45 +576,80 @@ export async function loadFullConfig(cwd: string = process.cwd()): Promise<Globa
  * This ensures modifications to the returned config don't affect the source.
  */
 function deepCloneConfig(config: GlobalConfig): GlobalConfig {
-  const result: GlobalConfig = {};
+	const result: GlobalConfig = {};
 
-  if (config.commands) {
-    result.commands = {};
-    for (const [cmd, defaults] of Object.entries(config.commands)) {
-      result.commands[cmd] = { ...defaults };
-    }
-  }
+	if (config.engine !== undefined) {
+		result.engine = config.engine;
+	}
 
-  return result;
+	if (config.evolve !== undefined) {
+		result.evolve = structuredClone(config.evolve);
+	}
+
+	if (config.flows?.directories !== undefined) {
+		result.flows = { directories: [...config.flows.directories] };
+	}
+
+	if (config.commands) {
+		result.commands = {};
+		for (const [cmd, defaults] of Object.entries(config.commands)) {
+			result.commands[cmd] = { ...defaults };
+		}
+	}
+
+	return result;
 }
 
 /**
  * Deep merge two configs (second takes priority)
  * Returns a new object - does not modify either input.
  */
-export function mergeConfigs(base: GlobalConfig, override: GlobalConfig): GlobalConfig {
-  // Start with a deep clone of base
-  const result = deepCloneConfig(base);
+export function mergeConfigs(
+	base: GlobalConfig,
+	override: GlobalConfig,
+): GlobalConfig {
+	// Start with a deep clone of base
+	const result = deepCloneConfig(base);
 
-  if (override.commands) {
-    result.commands = result.commands ? { ...result.commands } : {};
-    for (const [cmd, defaults] of Object.entries(override.commands)) {
-      result.commands[cmd] = {
-        ...(result.commands[cmd] || {}),
-        ...defaults,
-      };
-    }
-  }
+	if (override.engine !== undefined) {
+		result.engine = override.engine;
+	}
 
-  return result;
+	if (override.evolve !== undefined) {
+		result.evolve = structuredClone(override.evolve);
+	}
+
+	if (override.flows?.directories !== undefined) {
+		// Declared roster directories accumulate across config layers rather
+		// than replacing each other; every declared directory stays scanned.
+		const merged = [
+			...(result.flows?.directories ?? []),
+			...override.flows.directories,
+		];
+		result.flows = { directories: [...new Set(merged)] };
+	}
+
+	if (override.commands) {
+		result.commands = result.commands ? { ...result.commands } : {};
+		for (const [cmd, defaults] of Object.entries(override.commands)) {
+			result.commands[cmd] = {
+				...(result.commands[cmd] || {}),
+				...defaults,
+			};
+		}
+	}
+
+	return result;
 }
 
 /**
  * Get defaults for a specific command
  */
-export async function getCommandDefaults(command: string): Promise<CommandDefaults | undefined> {
-  const config = await loadGlobalConfig();
-  return config.commands?.[command];
+export async function getCommandDefaults(
+	command: string,
+): Promise<CommandDefaults | undefined> {
+	const config = await loadGlobalConfig();
+	return config.commands?.[command];
 }
 
 /**
@@ -332,35 +657,35 @@ export async function getCommandDefaults(command: string): Promise<CommandDefaul
  * Frontmatter values take priority over defaults
  */
 export function applyDefaults(
-  frontmatter: AgentFrontmatter,
-  defaults: CommandDefaults | undefined
+	frontmatter: AgentFrontmatter,
+	defaults: CommandDefaults | undefined,
 ): AgentFrontmatter {
-  if (!defaults) {
-    return frontmatter;
-  }
+	if (!defaults) {
+		return frontmatter;
+	}
 
-  // Defaults go first, frontmatter overrides
-  const result = { ...defaults } as AgentFrontmatter;
+	// Defaults go first, frontmatter overrides
+	const result = { ...defaults } as AgentFrontmatter;
 
-  for (const [key, value] of Object.entries(frontmatter)) {
-    result[key] = value;
-  }
+	for (const [key, value] of Object.entries(frontmatter)) {
+		result[key] = value;
+	}
 
-  return result;
+	return result;
 }
 
 /**
  * Get the config directory path
  */
 export function getConfigDir(): string {
-  return CONFIG_DIR;
+	return CONFIG_DIR;
 }
 
 /**
  * Get the config file path
  */
 export function getConfigFile(): string {
-  return CONFIG_FILE;
+	return CONFIG_FILE;
 }
 
 /**
@@ -369,7 +694,7 @@ export function getConfigFile(): string {
  * Module-level caching has been removed - config functions are now pure.
  */
 export function clearConfigCache(): void {
-  // No-op: caching has been removed from this module
+	// No-op: caching has been removed from this module
 }
 
 /**
@@ -378,7 +703,7 @@ export function clearConfigCache(): void {
  * Module-level caching has been removed - config functions are now pure.
  */
 export function clearProjectConfigCache(): void {
-  // No-op: caching has been removed from this module
+	// No-op: caching has been removed from this module
 }
 
 // ============================================================================
@@ -409,8 +734,8 @@ export const loadFullConfigFresh = loadFullConfig;
  * This is the pure function version that works with RunContext
  */
 export function getCommandDefaultsFromConfig(
-  config: GlobalConfig,
-  command: string
+	config: GlobalConfig,
+	command: string,
 ): CommandDefaults | undefined {
-  return config.commands?.[command];
+	return config.commands?.[command];
 }

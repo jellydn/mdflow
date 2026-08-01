@@ -11,22 +11,14 @@
  * - This prevents accidental exposure of secrets in log files
  */
 
-import pino, { type Logger } from "pino";
+import type { Logger } from "pino";
+import { EventEmitter } from "node:events";
 import { homedir } from "os";
 import { mkdirSync, existsSync, readdirSync } from "fs";
 import { join, basename } from "path";
 import { isSensitiveKey, redactArgs } from "./secrets";
 
 const LOG_BASE_DIR = join(homedir(), ".mdflow", "logs");
-
-// Ensure base log directory exists
-if (!existsSync(LOG_BASE_DIR)) {
-  try {
-    mkdirSync(LOG_BASE_DIR, { recursive: true });
-  } catch {
-    // Ignore - logging to file is optional
-  }
-}
 
 /**
  * Get the log directory path
@@ -57,8 +49,43 @@ export function listLogDirs(): string[] {
   }
 }
 
-// Default silent logger until initialized with agent file
-let currentLogger: Logger = pino({ level: "silent" });
+const noop = (): void => {};
+
+function createSilentLogger(bindings: Record<string, unknown> = {}): Logger {
+  const emitter = new EventEmitter() as EventEmitter & Record<string, unknown>;
+  const currentBindings = { ...bindings };
+  Object.assign(emitter, {
+    level: "silent",
+    levelVal: Number.POSITIVE_INFINITY,
+    version: "silent",
+    levels: {
+      values: { trace: 10, debug: 20, info: 30, warn: 40, error: 50, fatal: 60 },
+      labels: { 10: "trace", 20: "debug", 30: "info", 40: "warn", 50: "error", 60: "fatal" },
+    },
+    child: (childBindings: Record<string, unknown> = {}) =>
+      createSilentLogger({ ...currentBindings, ...childBindings }),
+    bindings: () => ({ ...currentBindings }),
+    setBindings: (nextBindings: Record<string, unknown>) => {
+      Object.assign(currentBindings, nextBindings);
+    },
+    isLevelEnabled: () => false,
+    onChild: noop,
+    trace: noop,
+    debug: noop,
+    info: noop,
+    warn: noop,
+    error: noop,
+    fatal: noop,
+    silent: noop,
+    flush: (callback?: () => void) => callback?.(),
+  });
+  return emitter as unknown as Logger;
+}
+
+const silentLogger = createSilentLogger();
+
+// Default dependency-free logger until a real run initializes file logging.
+let currentLogger: Logger = silentLogger;
 let currentAgentLogPath: string | null = null;
 
 /**
@@ -66,6 +93,7 @@ let currentAgentLogPath: string | null = null;
  * Creates a log file at ~/.mdflow/logs/<agent-name>/debug.log
  */
 export function initLogger(agentFile: string): Logger {
+  currentAgentLogPath = null;
   const agentName = basename(agentFile, ".md").replace(/\./g, "-");
   const logDir = join(LOG_BASE_DIR, agentName);
   const logFile = join(logDir, "debug.log");
@@ -76,35 +104,48 @@ export function initLogger(agentFile: string): Logger {
       mkdirSync(logDir, { recursive: true });
     } catch {
       // Fall back to silent logger
-      return pino({ level: "silent" });
+      currentLogger = silentLogger;
+      return currentLogger;
     }
   }
 
-  currentAgentLogPath = logFile;
+  try {
+    const pino = require("pino") as typeof import("pino");
+    currentAgentLogPath = logFile;
 
-  // Create logger that writes to file only (no stderr spam)
-  // Uses a custom serializer to redact sensitive values
-  currentLogger = pino(
-    {
-      level: "debug",
-      base: { agent: agentName },
-      timestamp: pino.stdTimeFunctions.isoTime,
-      // Custom hooks to redact sensitive data before logging
-      hooks: {
-        logMethod(inputArgs, method, level) {
-          // Process each argument to redact sensitive values
-          const redactedArgs = inputArgs.map((arg) => {
-            if (arg && typeof arg === "object" && !Array.isArray(arg)) {
-              return redactArgs(arg as Record<string, unknown>);
-            }
-            return arg;
-          });
-          return method.apply(this, redactedArgs as Parameters<typeof method>);
+    // Create logger that writes to file only (no stderr spam)
+    // Uses a custom serializer to redact sensitive values
+    currentLogger = pino(
+      {
+        level: "debug",
+        base: { agent: agentName },
+        timestamp: pino.stdTimeFunctions.isoTime,
+        // Custom hooks to redact sensitive data before logging
+        hooks: {
+          logMethod(inputArgs, method) {
+            // Process each argument to redact sensitive values
+            const redactedArgs = inputArgs.map((arg) => {
+              if (arg && typeof arg === "object" && !Array.isArray(arg)) {
+                return redactArgs(arg as Record<string, unknown>);
+              }
+              return arg;
+            });
+            return method.apply(this, redactedArgs as Parameters<typeof method>);
+          },
         },
       },
-    },
-    pino.destination({ dest: logFile, sync: false })
-  );
+      // sync: a CLI process often exits milliseconds after its last log
+      // line. The async SonicBoom destination buffers writes and registers
+      // an exit-time flushSync that THROWS ("sonic boom is not ready yet")
+      // when the fd isn't open yet — every fast error path then printed an
+      // uncaught-exception banner after the real error. Synchronous writes
+      // are microseconds for this log volume and cannot race exit.
+      pino.destination({ dest: logFile, sync: true })
+    );
+  } catch {
+    currentAgentLogPath = null;
+    currentLogger = silentLogger;
+  }
 
   return currentLogger;
 }
@@ -121,6 +162,17 @@ export function getLogger(): Logger {
  */
 export function getCurrentLogPath(): string | null {
   return currentAgentLogPath;
+}
+
+/** Reset module-global logger state for planning/read-only invocations. */
+export function resetLogger(): void {
+  try {
+    currentLogger.flush();
+  } catch {
+    // A destination that never finished opening has nothing to flush.
+  }
+  currentLogger = silentLogger;
+  currentAgentLogPath = null;
 }
 
 // Convenience child loggers - these use the current logger

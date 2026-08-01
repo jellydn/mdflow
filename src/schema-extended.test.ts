@@ -170,6 +170,28 @@ describe("frontmatter validation edge cases", () => {
       });
       expect(result.success).toBe(false);
     });
+
+    test("rejects object format keys that are not underscore-prefixed", () => {
+      const result = safeParseFrontmatter({
+        _inputs: {
+          name: { type: "text", default: "World" },
+        },
+      });
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error("expected invalid input key");
+      expect(result.errors).toBeDefined();
+    });
+
+    test("rejects text input defaults that are not strings", () => {
+      const result = safeParseFrontmatter({
+        _inputs: {
+          _name: { type: "text", default: 42 as any },
+        },
+      });
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error("expected invalid text default");
+      expect(result.errors).toBeDefined();
+    });
   });
 
   describe("passthrough behavior", () => {
@@ -256,13 +278,15 @@ describe("frontmatter validation edge cases", () => {
     test("provides clear error for invalid _inputs type", () => {
       const result = safeParseFrontmatter({ _inputs: 123 });
       expect(result.success).toBe(false);
+      if (result.success) throw new Error("expected invalid _inputs");
       expect(result.errors).toBeDefined();
-      expect(result.errors!.length).toBeGreaterThan(0);
+      expect(result.errors.length).toBeGreaterThan(0);
     });
 
     test("provides clear error for invalid _env type", () => {
       const result = safeParseFrontmatter({ _env: "not-an-object" });
       expect(result.success).toBe(false);
+      if (result.success) throw new Error("expected invalid _env");
       expect(result.errors).toBeDefined();
     });
 
@@ -294,7 +318,8 @@ describe("frontmatter fuzz tests", () => {
       fc.property(fc.array(fc.string()), (inputs) => {
         const result = safeParseFrontmatter({ _inputs: inputs });
         expect(result.success).toBe(true);
-        expect(result.data?._inputs).toEqual(inputs);
+        if (!result.success) throw new Error(result.errors.join("; "));
+        expect(result.data._inputs).toEqual(inputs);
       }),
       { numRuns: 100 }
     );

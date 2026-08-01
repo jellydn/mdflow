@@ -54,24 +54,43 @@ describe("validateFrontmatter", () => {
     expect((result as any)["dangerously-skip-permissions"]).toBe(true);
     expect((result as any)["mcp-config"]).toBe("./mcp.json");
   });
+
+  test("validates an explicit evolution policy", () => {
+    const result = validateFrontmatter({
+      evolve: {
+        mode: "propose",
+        triggers: ["explicit-feedback"],
+        budget: { "max-invocations": 7, "cooldown-ms": 60_000 },
+        gate: { "require-feedback-eval": true, "allow-capability-delta": false },
+      },
+    });
+    expect(result.evolve).toMatchObject({ mode: "propose" });
+  });
+
+  test("rejects misspelled evolution modes instead of silently doing nothing", () => {
+    expect(() => validateFrontmatter({ evolve: "autp" })).toThrow("Invalid frontmatter");
+  });
 });
 
 describe("safeParseFrontmatter", () => {
   test("returns success with valid data", () => {
     const result = safeParseFrontmatter({ model: "opus" });
     expect(result.success).toBe(true);
-    expect(result.data?.model).toBe("opus");
+    if (!result.success) throw new Error(result.errors.join("; "));
+    expect(result.data.model).toBe("opus");
   });
 
   test("returns success with _inputs", () => {
     const result = safeParseFrontmatter({ _inputs: ["name", "value"] });
     expect(result.success).toBe(true);
-    expect(result.data?._inputs).toEqual(["name", "value"]);
+    if (!result.success) throw new Error(result.errors.join("; "));
+    expect(result.data._inputs).toEqual(["name", "value"]);
   });
 
   test("returns errors when _inputs is not an array", () => {
     const result = safeParseFrontmatter({ _inputs: "invalid" });
     expect(result.success).toBe(false);
+    if (result.success) throw new Error("expected invalid frontmatter");
     expect(result.errors).toBeDefined();
   });
 });
@@ -92,6 +111,11 @@ describe("validateConfig", () => {
     expect(result.commands?.claude?.model).toBe("opus");
     expect(result.commands?.claude?.print).toBe(true);
     expect(result.commands?.gemini?.model).toBe("pro");
+  });
+
+  test("validates a project-level evolution policy", () => {
+    const result = validateConfig({ evolve: { mode: "propose", budget: { "max-invocations": 5 } } });
+    expect(result.evolve).toMatchObject({ mode: "propose" });
   });
 
   test("validates config with positional mappings", () => {
@@ -126,7 +150,8 @@ describe("safeParseConfig", () => {
       commands: { claude: { model: "opus" } }
     });
     expect(result.success).toBe(true);
-    expect(result.data?.commands?.claude?.model).toBe("opus");
+    if (!result.success) throw new Error(result.errors.join("; "));
+    expect(result.data.commands?.claude?.model).toBe("opus");
   });
 
   test("returns errors for invalid config", () => {
@@ -135,7 +160,8 @@ describe("safeParseConfig", () => {
       unknownField: true
     });
     expect(result.success).toBe(false);
+    if (result.success) throw new Error("expected invalid config");
     expect(result.errors).toBeDefined();
-    expect(result.errors!.length).toBeGreaterThan(0);
+    expect(result.errors.length).toBeGreaterThan(0);
   });
 });

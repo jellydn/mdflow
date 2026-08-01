@@ -3,11 +3,25 @@ import { expandImports, hasImports, toCanonicalPath, isMarkdownFileCommand } fro
 import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ImportError } from "./errors";
 
 let testDir: string;
+let importServer: ReturnType<typeof Bun.serve>;
+let importBaseUrl: string;
 
 beforeAll(async () => {
   testDir = await mkdtemp(join(tmpdir(), "imports-test-"));
+  importServer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      return path.includes("users")
+        ? Response.json({ id: 1, name: "Leanne Graham" })
+        : Response.json({ id: 1, title: "Local fixture" });
+    },
+  });
+  importBaseUrl = `http://127.0.0.1:${importServer.port}`;
 
   // Create test files
   await Bun.write(join(testDir, "simple.md"), "Hello from simple.md");
@@ -22,6 +36,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  importServer.stop(true);
   await rm(testDir, { recursive: true });
 });
 
@@ -66,6 +81,16 @@ test("expandImports handles subdirectory imports", async () => {
 test("expandImports throws on missing file", async () => {
   const content = "@./nonexistent.md";
   await expect(expandImports(content, testDir)).rejects.toThrow("Import not found");
+});
+
+test("expandImports throws typed ImportError for missing file", async () => {
+  try {
+    await expandImports("@./still-missing.md", testDir);
+    throw new Error("Expected expandImports to throw");
+  } catch (err) {
+    expect(err).toBeInstanceOf(ImportError);
+    expect((err as ImportError).errorCode).toBe("IMPORT_FILE_NOT_FOUND");
+  }
 });
 
 test("expandImports executes command inline", async () => {
@@ -136,26 +161,25 @@ test("hasImports distinguishes emails from URL imports", () => {
 });
 
 test("expandImports fetches markdown URL", async () => {
-  // Use jsonplaceholder for testing - reliable API
-  const content = "Docs: @https://jsonplaceholder.typicode.com/posts/1";
+  const content = `Docs: @${importBaseUrl}/posts/1`;
   const result = await expandImports(content, testDir);
   expect(result).toContain("Docs:");
-  expect(result).not.toContain("@https://");
+  expect(result).not.toContain(`@${importBaseUrl}`);
 });
 
 test("expandImports fetches JSON URL", async () => {
-  const content = "Data: @https://jsonplaceholder.typicode.com/users/1";
+  const content = `Data: @${importBaseUrl}/users/1`;
   const result = await expandImports(content, testDir);
   expect(result).toContain("Data:");
-  expect(result).toContain("Leanne Graham"); // jsonplaceholder user 1 name
-  expect(result).not.toContain("@https://");
+  expect(result).toContain("Leanne Graham");
+  expect(result).not.toContain(`@${importBaseUrl}`);
 });
 
 test("expandImports preserves emails while expanding URLs", async () => {
-  const content = "Contact: admin@example.com\nDocs: @https://jsonplaceholder.typicode.com/posts/1";
+  const content = `Contact: admin@example.com\nDocs: @${importBaseUrl}/posts/1`;
   const result = await expandImports(content, testDir);
   expect(result).toContain("admin@example.com"); // Email preserved
-  expect(result).not.toContain("@https://"); // URL expanded
+  expect(result).not.toContain(`@${importBaseUrl}`); // URL expanded
 });
 
 // Line range import tests
@@ -269,6 +293,74 @@ test("expandImports handles glob patterns", async () => {
   // Should be formatted as XML
   expect(result).toContain("<a path=");
   expect(result).toContain("<b path=");
+});
+
+test("expandImports handles parent directory glob patterns (issue #13)", async () => {
+  // Create a nested subdirectory structure to test parent directory globs
+  // Structure: testDir/parent-glob-test/subdir/agent.md
+  //            testDir/parent-glob-test/*.rs (files to find)
+  const parentDir = join(testDir, "parent-glob-test");
+  const subDir = join(parentDir, "subdir");
+
+  // Parent traversal is allowed up to the project root, so mark parentDir as
+  // the project (the security guard blocks globs beyond the nearest marker).
+  await Bun.write(join(parentDir, "package.json"), "{}");
+
+  // Create the Rust files in the parent directory
+  await Bun.write(join(parentDir, "main.rs"), "fn main() {}");
+  await Bun.write(join(parentDir, "lib.rs"), "pub mod lib;");
+
+  // Create dummy file in subdir to ensure it exists
+  await Bun.write(join(subDir, "dummy.md"), "");
+
+  // Run glob from subdir looking at parent with ../*.rs
+  const content = "@../*.rs";
+  const result = await expandImports(content, subDir);
+
+  // Should include both .rs files
+  expect(result).toContain("fn main() {}");
+  expect(result).toContain("pub mod lib;");
+  // Should be formatted as XML
+  expect(result).toContain("main.rs");
+  expect(result).toContain("lib.rs");
+});
+
+test("expandImports handles deep parent directory glob patterns", async () => {
+  // Test ../../**/*.rs pattern (2 levels up)
+  const deepParent = join(testDir, "deep-parent");
+  const level1 = join(deepParent, "level1");
+  const level2 = join(level1, "level2");
+
+  // Mark deepParent as the project root so two-level traversal stays legal.
+  await Bun.write(join(deepParent, "package.json"), "{}");
+
+  // Create files at the top level
+  await Bun.write(join(deepParent, "top.rs"), "// top level");
+  await Bun.write(join(deepParent, "nested/inner.rs"), "// nested");
+
+  // Create dummy to ensure level2 exists
+  await Bun.write(join(level2, "dummy.md"), "");
+
+  // Run glob from level2 looking 2 levels up with **/*.rs
+  const content = "@../../**/*.rs";
+  const result = await expandImports(content, level2);
+
+  // Should include both .rs files
+  expect(result).toContain("// top level");
+  expect(result).toContain("// nested");
+});
+
+test("expandImports blocks glob traversal beyond the project root", async () => {
+  // Structure: escape-test/ (project root marker) / inner / agent runs here.
+  // A glob reaching above the marker must be rejected, not silently resolved.
+  const projectRoot = join(testDir, "escape-test");
+  const inner = join(projectRoot, "inner");
+  await Bun.write(join(projectRoot, "package.json"), "{}");
+  await Bun.write(join(testDir, "outside.rs"), "// outside the project");
+  await Bun.write(join(inner, "dummy.md"), "");
+
+  const content = "@../../*.rs";
+  await expect(expandImports(content, inner)).rejects.toThrow("escapes project root");
 });
 
 // Canonical path tests
@@ -613,11 +705,11 @@ describe("parallel import resolution", () => {
   test("parallel resolution with URL and file imports", async () => {
     await Bun.write(join(testDir, "with-url.md"), "Local file");
 
-    const content = "@./with-url.md @https://jsonplaceholder.typicode.com/posts/1";
+    const content = `@./with-url.md @${importBaseUrl}/posts/1`;
     const result = await expandImports(content, testDir);
 
     expect(result).toContain("Local file");
-    expect(result).not.toContain("@https://");
+    expect(result).not.toContain(`@${importBaseUrl}`);
   });
 
   test("concurrency limit of 1 processes sequentially", async () => {

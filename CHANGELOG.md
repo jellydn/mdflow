@@ -1,3 +1,380 @@
+# [4.9.0](https://github.com/johnlindquist/mdflow/compare/v4.8.0...v4.9.0) (2026-07-25)
+
+
+### Features
+
+* **cli:** provenance-aware codex isolation, grok/kimi engines, flow catalog ([c3052a3](https://github.com/johnlindquist/mdflow/commit/c3052a36b92dde40c2887d15a5525b9bb2fd924e))
+
+# [4.8.0](https://github.com/johnlindquist/mdflow/compare/v4.7.0...v4.8.0) (2026-07-16)
+
+
+### Features
+
+* unified Workbench flow catalog and md capture conversation-capture guide ([e3946dc](https://github.com/johnlindquist/mdflow/commit/e3946dc6664e7ad600b43edfc2d37e9c911a6d82))
+
+# [4.7.0](https://github.com/johnlindquist/mdflow/compare/v4.6.1...v4.7.0) (2026-07-15)
+
+
+### Bug Fixes
+
+* **security:** close the six release-gating gaps from the Oracle follow-up review ([7e37faf](https://github.com/johnlindquist/mdflow/commit/7e37faf4d10dd09bdb5d21a21f7a29fb63a17799))
+* **security:** fail-closed managed blocks, symlink containment, strict consent boundaries ([98961e7](https://github.com/johnlindquist/mdflow/commit/98961e7c2447fbbf2850f69f1bc28c93ab7f7161))
+* **security:** fail-closed README sync, non-regular config refusal, indeterminate roster warnings ([2155949](https://github.com/johnlindquist/mdflow/commit/215594903306a712925cd96d7c83f25e38f0e06d))
+
+
+### Features
+
+* **doctor:** add agent operations contract, md doctor, and managed roster card ([31ff40d](https://github.com/johnlindquist/mdflow/commit/31ff40dd239a55f8506c3b762eef67842a625a52))
+* **init:** first-run agent handoff and flows-first agent guidance opt-in ([4ce2b8f](https://github.com/johnlindquist/mdflow/commit/4ce2b8f16c3b0ee0517b41b97618b91805d70330))
+
+## [4.6.1](https://github.com/johnlindquist/mdflow/compare/v4.6.0...v4.6.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **codex:** isolate ambient hooks for every flow ([1453567](https://github.com/johnlindquist/mdflow/commit/1453567a237bea7e277305637174f48126caba8c))
+
+# [4.6.0](https://github.com/johnlindquist/mdflow/compare/v4.5.0...v4.6.0) (2026-07-13)
+
+
+### Features
+
+* **evals:** add fail-closed eval convention ([551a03c](https://github.com/johnlindquist/mdflow/commit/551a03cd958eda403817e5b2823ccd7650dc82fa))
+
+# [4.5.0](https://github.com/johnlindquist/mdflow/compare/v4.4.0...v4.5.0) (2026-07-11)
+
+
+### Bug Fixes
+
+* **hooks:** fail-closed guard handlers, atomic prepared home, hook bytes in fingerprints ([17593a2](https://github.com/johnlindquist/mdflow/commit/17593a2b589c8a31371433b1d8bab05f4a57c3d7))
+
+
+### Features
+
+* **hooks:** support the claude engine ([4dc9ec2](https://github.com/johnlindquist/mdflow/commit/4dc9ec2daf4573f0f2f98b73b28dba06b87bc5d3))
+
+# [4.4.0](https://github.com/johnlindquist/mdflow/compare/v4.3.1...v4.4.0) (2026-07-11)
+
+
+### Bug Fixes
+
+* **command:** stop passing the parent's open stdin to print-mode engines ([9adfbc2](https://github.com/johnlindquist/mdflow/commit/9adfbc21b8e0f9f2471d700357162db31d38beb7))
+* **compat:** never corrupt flow-mapping frontmatter when stamping versions ([06b143c](https://github.com/johnlindquist/mdflow/commit/06b143ce66302bc3dabd196a2b73edecea560c37))
+
+
+### Features
+
+* **hooks:** lifecycle hooks by convention, codex-first ([736e937](https://github.com/johnlindquist/mdflow/commit/736e937ce599dc648233287c053af246b2701e0d))
+* **render:** md render + hooks/render wired through the CLI runner ([fef3584](https://github.com/johnlindquist/mdflow/commit/fef35844d9e8af0a2fe1ed77fcabb6255892d6fa))
+* **workbench:** search-first TUI, tab-safe prompts, explicit creation scope ([742459f](https://github.com/johnlindquist/mdflow/commit/742459f67bde3590b60627625da3c4441ed3115c))
+
+
+### Performance Improvements
+
+* **cli:** pre-runner help router and lazy startup boundaries ([ad202e7](https://github.com/johnlindquist/mdflow/commit/ad202e7db0e55eafe4ce747e67d05cc2824265b5))
+
+## [4.3.1](https://github.com/johnlindquist/mdflow/compare/v4.3.0...v4.3.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **cli:** read stdin lazily so unreferenced stdin can't hang headless runs ([81feedd](https://github.com/johnlindquist/mdflow/commit/81feedd46ae38269f4b731afefda53b96f63dc66))
+
+# [4.3.0](https://github.com/johnlindquist/mdflow/compare/v4.2.0...v4.3.0) (2026-07-09)
+
+
+### Bug Fixes
+
+* **events:** keep NDJSON protocol-pure past pipe-buffer limits and slow consumers ([053b2ef](https://github.com/johnlindquist/mdflow/commit/053b2ef02f3678fd7c5900f06183ce9408c6b0d2))
+
+
+### Features
+
+* **events:** add md <flow> --events NDJSON run event stream ([d92f207](https://github.com/johnlindquist/mdflow/commit/d92f207715f85ebf1f3d1f5a8be76c03a8270ea5))
+* **explain:** add --json mode serializing the resolved explanation ([f1b3a82](https://github.com/johnlindquist/mdflow/commit/f1b3a8223f786558fe20b4645342dcc7222c1a4f))
+* **roster:** add md roster --json (Flow UX Protocol v1) ([6ce903f](https://github.com/johnlindquist/mdflow/commit/6ce903f44e5b3eba87a36c70de9746ed0a023911))
+* **runtime:** add stream capture mode and workflow step hooks ([48c83a8](https://github.com/johnlindquist/mdflow/commit/48c83a82c9552085deee064baf9420adc8540ae4))
+
+# [4.2.0](https://github.com/johnlindquist/mdflow/compare/v4.1.0...v4.2.0) (2026-07-09)
+
+
+### Features
+
+* add flow workbench onboarding ([9eb3883](https://github.com/johnlindquist/mdflow/commit/9eb3883a4a11058a8d21103e587be1bea1d2f0eb))
+
+# [4.1.0](https://github.com/johnlindquist/mdflow/compare/v4.0.2...v4.1.0) (2026-07-08)
+
+
+### Bug Fixes
+
+* make evolve lifecycle errors predictable ([b4f87e3](https://github.com/johnlindquist/mdflow/commit/b4f87e35a646364ed0d678527196f0a136b026b5))
+* preserve terminal stdio for interactive flows ([c69cbf9](https://github.com/johnlindquist/mdflow/commit/c69cbf997506d58036f374ed4cbdcb41f7b314ca))
+* tighten evolve consent and policy reporting ([f48337a](https://github.com/johnlindquist/mdflow/commit/f48337a49c7186215f8c3ad3f3b04d815a4c7acb))
+
+
+### Features
+
+* make evolve proposal-first and verifiable ([90de31f](https://github.com/johnlindquist/mdflow/commit/90de31f24cc53134b5de9d42febf6d8ed96bb7a0))
+
+## [4.0.2](https://github.com/johnlindquist/mdflow/compare/v4.0.1...v4.0.2) (2026-07-08)
+
+
+### Bug Fixes
+
+* **release:** keep generated site facts in sync ([f1d10d7](https://github.com/johnlindquist/mdflow/commit/f1d10d7262ae3064d4aa126309f689c08d7aa89c))
+
+## [4.0.1](https://github.com/johnlindquist/mdflow/compare/v4.0.0...v4.0.1) (2026-07-08)
+
+
+### Bug Fixes
+
+* harden trust gates and release contract ([09cfc20](https://github.com/johnlindquist/mdflow/commit/09cfc20b1a6188612a5787eaddcebc8eb9b4c50d))
+
+# [4.0.0](https://github.com/johnlindquist/mdflow/compare/v3.1.0...v4.0.0) (2026-07-07)
+
+
+* feat!: isolate every engine by default and add first-class system prompt override ([20a9fe0](https://github.com/johnlindquist/mdflow/commit/20a9fe0f636bd5fa53cc12c8bd48bce6c6d0cd92))
+
+
+### Bug Fixes
+
+* **site:** tighten hero CTA layout ([e0380da](https://github.com/johnlindquist/mdflow/commit/e0380da1947beb8b7e8ddf956620b97ac212a86b))
+
+
+### BREAKING CHANGES
+
+* flows on claude/codex/gemini/copilot/opencode that
+implicitly relied on ambient skills, MCP servers, or CLAUDE.md/AGENTS.md
+memory now run isolated by default. Add `_isolated: false` to restore
+the previous behavior, or declare the needed context explicitly in
+frontmatter.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+# [3.1.0](https://github.com/johnlindquist/mdflow/compare/v3.0.0...v3.1.0) (2026-07-07)
+
+
+### Bug Fixes
+
+* **compat:** stamp _compat only on major/minor upgrades ([11cf84b](https://github.com/johnlindquist/mdflow/commit/11cf84b66dcfbdae91d20d0cd1212afc6ab70b05))
+* **pkg:** whitelist published files; add site facts generator ([909812b](https://github.com/johnlindquist/mdflow/commit/909812bd27a82d30b4fcd254502849d789f7cb1c))
+
+
+### Features
+
+* **compat:** automatic frontmatter version/compatibility stamps ([df0e2b9](https://github.com/johnlindquist/mdflow/commit/df0e2b90aca929e87862eda508e4674e7edbb4fb))
+
+# [3.0.0-next.6](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.5...v3.0.0-next.6) (2026-07-07)
+
+
+### Bug Fixes
+
+* **pkg:** whitelist published files; add site facts generator ([909812b](https://github.com/johnlindquist/mdflow/commit/909812bd27a82d30b4fcd254502849d789f7cb1c))
+
+# [3.0.0-next.5](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.4...v3.0.0-next.5) (2026-07-07)
+
+
+### Bug Fixes
+
+* **compat:** stamp _compat only on major/minor upgrades ([11cf84b](https://github.com/johnlindquist/mdflow/commit/11cf84b66dcfbdae91d20d0cd1212afc6ab70b05))
+
+# [3.0.0-next.4](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.3...v3.0.0-next.4) (2026-07-07)
+
+
+### Features
+
+* **compat:** automatic frontmatter version/compatibility stamps ([df0e2b9](https://github.com/johnlindquist/mdflow/commit/df0e2b90aca929e87862eda508e4674e7edbb4fb))
+
+# [3.0.0-next.3](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.2...v3.0.0-next.3) (2026-07-06)
+
+
+* feat!: mdflow v3 — markdown agents that evolve ([7d521a6](https://github.com/johnlindquist/mdflow/commit/7d521a6a46033bd8a8a718321fd1e422dd0dada3))
+
+
+### Features
+
+* **guardrails:** enforce _max_prompt_tokens; adhoc engines match the ladder ([f7ebb68](https://github.com/johnlindquist/mdflow/commit/f7ebb68181cdfb79f560fefc156323b5de066814))
+
+
+### BREAKING CHANGES
+
+* engine: replaces tool:, bare .md files run on the resolved
+engine or print as documents, description/route are reserved frontmatter
+keys. See the v3 commit series for details.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+# [3.0.0](https://github.com/johnlindquist/mdflow/compare/v2.35.5...v3.0.0) (2026-07-06)
+
+
+* docs(v3)!: terminology sweep + v3 docs; retire MA_COMMAND references ([fcaf4c2](https://github.com/johnlindquist/mdflow/commit/fcaf4c2983288b9071c5d79a251bdd0c0774627b))
+* feat!: mdflow v3 — markdown agents that evolve ([7d521a6](https://github.com/johnlindquist/mdflow/commit/7d521a6a46033bd8a8a718321fd1e422dd0dada3))
+* feat(engine)!: resolution ladder with a default engine; engine: replaces tool: ([0889b9f](https://github.com/johnlindquist/mdflow/commit/0889b9f5ec250e253130bb27b8f430f6cdf22168))
+
+
+### Bug Fixes
+
+* **command:** dedupe shell arg escaping ([bbbc9d0](https://github.com/johnlindquist/mdflow/commit/bbbc9d0213c6109025b6ba2f365a074d862bf5ec))
+* **core:** wire MdflowError handling in config and entrypoint ([5af774b](https://github.com/johnlindquist/mdflow/commit/5af774b881fc7d67c1bb0405c5f10f30f1faeb90))
+* **imports:** constrain markerless root fallback ([fb0af00](https://github.com/johnlindquist/mdflow/commit/fb0af000bd18bc0f60ed8b83f2f6025a053f17d9))
+* **imports:** harden path and URL import validation ([06e0a1a](https://github.com/johnlindquist/mdflow/commit/06e0a1a2a25ae062bfedd418e818027faaabc8e7))
+* **tests:** restore green baseline before v3 work ([9ab4620](https://github.com/johnlindquist/mdflow/commit/9ab4620a5fc26f0e17f721d305e0373aac8b7175)), closes [#13](https://github.com/johnlindquist/mdflow/issues/13)
+
+
+### Features
+
+* **adapters:** add portable agent spec with provider-agnostic frontmatter translation ([0497bd1](https://github.com/johnlindquist/mdflow/commit/0497bd130f7479407511b9fce26a22583fd845e0))
+* **adapters:** pi (hermetic default engine), cursor-agent, and agy (Antigravity) ([d421ae8](https://github.com/johnlindquist/mdflow/commit/d421ae8d827b63c0845fbcefe80b5c62f0e2c702))
+* **cli:** add --json output mode for scripting and CI integration ([cb0b4a7](https://github.com/johnlindquist/mdflow/commit/cb0b4a7e8f5811774bc10592813a8a3f5fbbb609))
+* **context:** add context provider registry with git, tree, and rg providers ([f7b4671](https://github.com/johnlindquist/mdflow/commit/f7b4671d37deeb6353ad7459a32be886b5d34091))
+* **context:** wire context providers into import parser and expansion ([f598322](https://github.com/johnlindquist/mdflow/commit/f598322b570a085a72b6cffa96e23320e11a7de1))
+* **engine:** filename rung only claims runnable engines; eval --filter guardrail ([b7a245f](https://github.com/johnlindquist/mdflow/commit/b7a245fd3314d8c531aafbcca51fb692bf0982eb))
+* **errors:** add MdflowError base and ValidationError ([b866d59](https://github.com/johnlindquist/mdflow/commit/b866d5971555d264b29c01bb82726c2a1e51eb83))
+* **eval,engine:** repo-bound eval cases; description/route are reserved keys ([6bff9af](https://github.com/johnlindquist/mdflow/commit/6bff9af16ac54b70880d4d35efb1e09f847e872e))
+* **eval:** md eval — behavioral eval suites for flows with a trust ledger ([ebb5082](https://github.com/johnlindquist/mdflow/commit/ebb5082d80817e2563f01163018f3bc2d2bb795f))
+* **guardrails:** enforce _max_prompt_tokens; adhoc engines match the ladder ([f7ebb68](https://github.com/johnlindquist/mdflow/commit/f7ebb68181cdfb79f560fefc156323b5de066814))
+* **output:** add structured output extraction, validation, and sink module ([53dd2ff](https://github.com/johnlindquist/mdflow/commit/53dd2ff6ac4bf23dac072d68b3818e1b7ab4a11e))
+* **output:** wire structured output processing into CLI runner and post-run menu ([a250771](https://github.com/johnlindquist/mdflow/commit/a250771c829d894f442c2c4c03e6e61c2afaccbb))
+* **pi:** Codex-subscription auth bridge + adapter prepareEnv hook ([07668c4](https://github.com/johnlindquist/mdflow/commit/07668c4a637677909090db8abcffb9b06cc1afa9))
+* **registry:** add agent registry with install/remove/list and lockfile integrity ([b54807d](https://github.com/johnlindquist/mdflow/commit/b54807d393b1cb5d76c392a7e6fdaa803f2dfd2f))
+* **schema:** enforce typed _inputs and parse result unions ([28dfcc1](https://github.com/johnlindquist/mdflow/commit/28dfcc1fbaee00ea20537ac0a8122ea9e10898c6))
+* **skill:** installable agent skill — npx skills add johnlindquist/mdflow ([ad2b0e8](https://github.com/johnlindquist/mdflow/commit/ad2b0e833eac752ba610f3c380d5ad7e4d814bbc))
+* **spike:** add Bun p-queue compatibility PoC ([b3887cd](https://github.com/johnlindquist/mdflow/commit/b3887cdf8bb26f883380369777989709ec59cbaf))
+* **telemetry:** add run telemetry logging ([7bd4781](https://github.com/johnlindquist/mdflow/commit/7bd47814d7046adc1395fc0aaf9c9038c832d032))
+* **workflow:** add multi-step workflow engine with DAG execution and step caching ([5287827](https://github.com/johnlindquist/mdflow/commit/52878272a79191a9e2936245443a0f1592721c9b))
+
+
+### BREAKING CHANGES
+
+* engine: replaces tool:, bare .md files run on the resolved
+engine or print as documents, description/route are reserved frontmatter
+keys. See the v3 commit series for details.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs and examples now describe v3 semantics (engine:,
+default engine pi, document rule for frontmatter-less files).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+* bare .md files no longer error with COMMAND_MISSING — they
+either run on the resolved engine (frontmatter present) or print as
+documents (no frontmatter). Frontmatter tool:/_tool: still resolve but warn;
+use engine:. --engine is the canonical flag; --_command/-_c/--tool remain as
+deprecated aliases. resolveCommand() no longer throws for missing commands.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+# [3.0.0-next.2](https://github.com/johnlindquist/mdflow/compare/v3.0.0-next.1...v3.0.0-next.2) (2026-07-05)
+
+
+### Features
+
+* **eval,engine:** repo-bound eval cases; description/route are reserved keys ([6bff9af](https://github.com/johnlindquist/mdflow/commit/6bff9af16ac54b70880d4d35efb1e09f847e872e))
+
+# [3.0.0-next.1](https://github.com/johnlindquist/mdflow/compare/v2.35.4...v3.0.0-next.1) (2026-07-05)
+
+
+* docs(v3)!: terminology sweep + v3 docs; retire MA_COMMAND references ([fcaf4c2](https://github.com/johnlindquist/mdflow/commit/fcaf4c2983288b9071c5d79a251bdd0c0774627b))
+* feat(engine)!: resolution ladder with a default engine; engine: replaces tool: ([0889b9f](https://github.com/johnlindquist/mdflow/commit/0889b9f5ec250e253130bb27b8f430f6cdf22168))
+
+
+### Bug Fixes
+
+* **command:** dedupe shell arg escaping ([bbbc9d0](https://github.com/johnlindquist/mdflow/commit/bbbc9d0213c6109025b6ba2f365a074d862bf5ec))
+* **core:** wire MdflowError handling in config and entrypoint ([5af774b](https://github.com/johnlindquist/mdflow/commit/5af774b881fc7d67c1bb0405c5f10f30f1faeb90))
+* **imports:** constrain markerless root fallback ([fb0af00](https://github.com/johnlindquist/mdflow/commit/fb0af000bd18bc0f60ed8b83f2f6025a053f17d9))
+* **imports:** harden path and URL import validation ([06e0a1a](https://github.com/johnlindquist/mdflow/commit/06e0a1a2a25ae062bfedd418e818027faaabc8e7))
+* stop spinner before streaming output to prevent double-rendering ([48af0af](https://github.com/johnlindquist/mdflow/commit/48af0af6fdcb3b7d0d8206670678316fad8d7be0))
+* **tests:** restore green baseline before v3 work ([9ab4620](https://github.com/johnlindquist/mdflow/commit/9ab4620a5fc26f0e17f721d305e0373aac8b7175)), closes [#13](https://github.com/johnlindquist/mdflow/issues/13)
+
+
+### Features
+
+* **adapters:** add portable agent spec with provider-agnostic frontmatter translation ([0497bd1](https://github.com/johnlindquist/mdflow/commit/0497bd130f7479407511b9fce26a22583fd845e0))
+* **adapters:** pi (hermetic default engine), cursor-agent, and agy (Antigravity) ([d421ae8](https://github.com/johnlindquist/mdflow/commit/d421ae8d827b63c0845fbcefe80b5c62f0e2c702))
+* **cli:** add --json output mode for scripting and CI integration ([cb0b4a7](https://github.com/johnlindquist/mdflow/commit/cb0b4a7e8f5811774bc10592813a8a3f5fbbb609))
+* **context:** add context provider registry with git, tree, and rg providers ([f7b4671](https://github.com/johnlindquist/mdflow/commit/f7b4671d37deeb6353ad7459a32be886b5d34091))
+* **context:** wire context providers into import parser and expansion ([f598322](https://github.com/johnlindquist/mdflow/commit/f598322b570a085a72b6cffa96e23320e11a7de1))
+* **engine:** filename rung only claims runnable engines; eval --filter guardrail ([b7a245f](https://github.com/johnlindquist/mdflow/commit/b7a245fd3314d8c531aafbcca51fb692bf0982eb))
+* **errors:** add MdflowError base and ValidationError ([b866d59](https://github.com/johnlindquist/mdflow/commit/b866d5971555d264b29c01bb82726c2a1e51eb83))
+* **eval:** md eval — behavioral eval suites for flows with a trust ledger ([ebb5082](https://github.com/johnlindquist/mdflow/commit/ebb5082d80817e2563f01163018f3bc2d2bb795f))
+* **output:** add structured output extraction, validation, and sink module ([53dd2ff](https://github.com/johnlindquist/mdflow/commit/53dd2ff6ac4bf23dac072d68b3818e1b7ab4a11e))
+* **output:** wire structured output processing into CLI runner and post-run menu ([a250771](https://github.com/johnlindquist/mdflow/commit/a250771c829d894f442c2c4c03e6e61c2afaccbb))
+* **pi:** Codex-subscription auth bridge + adapter prepareEnv hook ([07668c4](https://github.com/johnlindquist/mdflow/commit/07668c4a637677909090db8abcffb9b06cc1afa9))
+* **registry:** add agent registry with install/remove/list and lockfile integrity ([b54807d](https://github.com/johnlindquist/mdflow/commit/b54807d393b1cb5d76c392a7e6fdaa803f2dfd2f))
+* **schema:** enforce typed _inputs and parse result unions ([28dfcc1](https://github.com/johnlindquist/mdflow/commit/28dfcc1fbaee00ea20537ac0a8122ea9e10898c6))
+* **skill:** installable agent skill — npx skills add johnlindquist/mdflow ([ad2b0e8](https://github.com/johnlindquist/mdflow/commit/ad2b0e833eac752ba610f3c380d5ad7e4d814bbc))
+* **spike:** add Bun p-queue compatibility PoC ([b3887cd](https://github.com/johnlindquist/mdflow/commit/b3887cdf8bb26f883380369777989709ec59cbaf))
+* **telemetry:** add run telemetry logging ([7bd4781](https://github.com/johnlindquist/mdflow/commit/7bd47814d7046adc1395fc0aaf9c9038c832d032))
+* **workflow:** add multi-step workflow engine with DAG execution and step caching ([5287827](https://github.com/johnlindquist/mdflow/commit/52878272a79191a9e2936245443a0f1592721c9b))
+
+
+### BREAKING CHANGES
+
+* docs and examples now describe v3 semantics (engine:,
+default engine pi, document rule for frontmatter-less files).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+* bare .md files no longer error with COMMAND_MISSING — they
+either run on the resolved engine (frontmatter present) or print as
+documents (no frontmatter). Frontmatter tool:/_tool: still resolve but warn;
+use engine:. --engine is the canonical flag; --_command/-_c/--tool remain as
+deprecated aliases. resolveCommand() no longer throws for missing commands.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+## [Unreleased]
+
+### Features
+
+* standardize typed error model with stable `errorCode` metadata and helper utilities ([b866d59](https://github.com/johnlindquist/mdflow/commit/b866d59))
+* enforce typed `_inputs` schemas and add non-throwing parse result unions for schema validation ([28dfcc1](https://github.com/johnlindquist/mdflow/commit/28dfcc1))
+
+### Bug Fixes
+
+* wire structured `MdflowError` handling through config loading and top-level CLI entrypoint ([5af774b](https://github.com/johnlindquist/mdflow/commit/5af774b))
+* harden local/URL import validation and tighten markerless fallback behavior ([06e0a1a](https://github.com/johnlindquist/mdflow/commit/06e0a1a), [fb0af00](https://github.com/johnlindquist/mdflow/commit/fb0af00))
+* dedupe shell argument escaping to reduce platform-specific quoting drift ([bbbc9d0](https://github.com/johnlindquist/mdflow/commit/bbbc9d0))
+
+### Tests
+
+* expand security, path, command escaping, and error metadata coverage for release hardening ([902ed97](https://github.com/johnlindquist/mdflow/commit/902ed97), [3e530f8](https://github.com/johnlindquist/mdflow/commit/3e530f8), [c4e3fe4](https://github.com/johnlindquist/mdflow/commit/c4e3fe4))
+
+## [2.35.5](https://github.com/johnlindquist/mdflow/compare/v2.35.4...v2.35.5) (2025-12-19)
+
+
+### Bug Fixes
+
+* stop spinner before streaming output to prevent double-rendering ([48af0af](https://github.com/johnlindquist/mdflow/commit/48af0af6fdcb3b7d0d8206670678316fad8d7be0))
+
+## [2.35.4](https://github.com/johnlindquist/mdflow/compare/v2.35.3...v2.35.4) (2025-12-19)
+
+
+### Bug Fixes
+
+* split comma-separated values for variadic flags ([5d394c8](https://github.com/johnlindquist/mdflow/commit/5d394c83ddfb9935858fa6f016bbb99f2604f59f))
+
+## [2.35.3](https://github.com/johnlindquist/mdflow/compare/v2.35.2...v2.35.3) (2025-12-19)
+
+
+### Bug Fixes
+
+* use --flag=value syntax for variadic CLI flags ([12422cd](https://github.com/johnlindquist/mdflow/commit/12422cd58b40fd8292dad7e4866e69a93bb260bf))
+
+## [2.35.2](https://github.com/johnlindquist/mdflow/compare/v2.35.1...v2.35.2) (2025-12-16)
+
+
+### Bug Fixes
+
+* support parent directory glob patterns in imports (closes [#13](https://github.com/johnlindquist/mdflow/issues/13)) ([89bbda9](https://github.com/johnlindquist/mdflow/commit/89bbda9f1dc42c545421250616a8f1f1bef2ca11))
+
+## [2.35.1](https://github.com/johnlindquist/mdflow/compare/v2.35.0...v2.35.1) (2025-12-16)
+
+
+### Bug Fixes
+
+* update README and GUIDE with correct CLI usage and new features ([7155be1](https://github.com/johnlindquist/mdflow/commit/7155be143c4f068a5be6d88c09dd5b3730363075))
+
 # [2.35.0](https://github.com/johnlindquist/mdflow/compare/v2.34.0...v2.35.0) (2025-12-16)
 
 

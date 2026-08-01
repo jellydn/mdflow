@@ -11,7 +11,7 @@ import { spawn } from "bun";
 
 /**
  * Smoke tests for piping between .md agent files.
- * Uses MA_COMMAND=echo to simulate LLM responses without actual API calls.
+ * Fixtures use the echo engine (filename-pinned) so no real LLM is ever called.
  * These tests verify the stdin/stdout piping mechanism works correctly.
  */
 
@@ -41,7 +41,7 @@ Process this input:
     );
 
     const result = await spawnMdWithPipe(agentFile, "hello world", [], {
-      env: { MA_COMMAND: "echo" },
+      env: { ...process.env } as Record<string, string>,
     });
 
     expect(result.exitCode).toBe(0);
@@ -70,7 +70,7 @@ STAGE2_RECEIVED: {{ _stdin }}
       ],
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, MA_COMMAND: "echo" },
+      env: { ...process.env } as Record<string, string>,
     });
 
     const output = await new Response(proc.stdout).text();
@@ -107,7 +107,7 @@ STAGE2_RECEIVED: {{ _stdin }}
       ],
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, MA_COMMAND: "echo" },
+      env: { ...process.env } as Record<string, string>,
     });
 
     const output = await new Response(proc.stdout).text();
@@ -131,7 +131,7 @@ Hello {{ _name }}! Input: {{ _stdin }}
     );
 
     const result = await spawnMdWithPipe(agent, "context", ["--_name", "World"], {
-      env: { MA_COMMAND: "echo" },
+      env: { ...process.env } as Record<string, string>,
     });
 
     expect(result.exitCode).toBe(0);
@@ -168,7 +168,7 @@ No stdin expected
 `
     );
 
-    const result = await spawnMd([agent], { env: { MA_COMMAND: "echo" } });
+    const result = await spawnMd([agent], { env: { MDFLOW_ENGINE: "echo" } });
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("No stdin expected");
@@ -190,7 +190,7 @@ Received: {{ _stdin }}
       cmd: ["bash", "-c", `printf "line1\\nline2\\nline3" | bun run ${CLI_PATH} ${agent}`],
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, MA_COMMAND: "echo" },
+      env: { ...process.env } as Record<string, string>,
     });
 
     const output = await new Response(proc.stdout).text();
@@ -201,4 +201,55 @@ Received: {{ _stdin }}
     expect(output).toContain("line2");
     expect(output).toContain("line3");
   });
+});
+
+describe("smoke: never-closing stdin", () => {
+  let testDir: string;
+  let cleanup: () => Promise<void>;
+
+  beforeAll(async () => {
+    const temp = await createTempDir("md-smoke-stdin-hang-");
+    testDir = temp.tempDir;
+    cleanup = temp.cleanup;
+  });
+
+  afterAll(async () => {
+    await cleanup();
+  });
+
+  // Regression: a headless caller (hook, cron, detached agent) can hand the
+  // CLI a non-TTY stdin that never reaches EOF. A flow that never references
+  // {{ _stdin }} must not drain stdin at all, or it blocks forever.
+  test("flow without _stdin completes while stdin is held open", async () => {
+    const agent = await createTestAgent(
+      testDir,
+      "no-stdin-ref.echo.md",
+      `---
+---
+Runs without reading stdin
+`
+    );
+
+    const proc = spawn({
+      cmd: ["bun", "run", CLI_PATH, agent],
+      stdin: "pipe", // held open for the whole test — EOF never arrives
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env } as Record<string, string>,
+    });
+
+    const timeout = new Promise<"timeout">((resolve) =>
+      setTimeout(() => resolve("timeout"), 15000)
+    );
+    const outcome = await Promise.race([proc.exited, timeout]);
+
+    if (outcome === "timeout") {
+      proc.kill();
+      throw new Error("CLI hung draining a never-closing stdin for a flow that does not reference {{ _stdin }}");
+    }
+
+    const stdout = await new Response(proc.stdout).text();
+    expect(outcome).toBe(0);
+    expect(stdout).toContain("Runs without reading stdin");
+  }, 30000);
 });

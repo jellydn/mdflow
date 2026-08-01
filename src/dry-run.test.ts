@@ -1,12 +1,14 @@
 import { expect, test, describe, beforeAll, afterAll } from "bun:test";
-import { writeFile } from "fs/promises";
-import { join } from "path";
+import { chmod, mkdir, writeFile } from "fs/promises";
+import { existsSync } from "fs";
+import { delimiter, join } from "path";
 import {
   extractFlag,
   createFlagExtractionTests,
   spawnMd,
   createTempDir,
   createTestAgent,
+  CLI_PATH,
 } from "./test-utils";
 
 /**
@@ -88,6 +90,42 @@ Hello, this is a test prompt.`
     expect(result.stdout).toContain("Estimated tokens:");
   });
 
+  test("--dry-run is owned by md and never spawns the engine", async () => {
+    const binDir = join(tempDir, `dry-run-bin-${Date.now()}`);
+    const sentinel = join(tempDir, `dry-run-engine-spawned-${Date.now()}`);
+    await mkdir(binDir, { recursive: true });
+    const fakeCodex = join(binDir, "codex");
+    await writeFile(
+      fakeCodex,
+      '#!/bin/sh\nprintf "spawned\\n" > "$MDFLOW_DRY_RUN_SENTINEL"\nexit 0\n',
+    );
+    await chmod(fakeCodex, 0o755);
+    const testFile = await createTestAgent(
+      tempDir,
+      "owned-dry-run.codex.md",
+      `---
+model: gpt-5.5
+---
+Preview this prompt without executing it.`,
+    );
+
+    const result = await spawnMd([testFile, "--dry-run"], {
+      env: {
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        MDFLOW_DRY_RUN_SENTINEL: sentinel,
+        MDFLOW_ENGINE: "",
+        HOME: join(tempDir, `dry-run-home-${Date.now()}`),
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DRY RUN");
+    expect(result.stdout).toContain("Command:\n   codex ");
+    expect(result.stdout).toContain("Estimated tokens:");
+    expect(result.stdout).not.toContain("--dry-run");
+    expect(existsSync(sentinel)).toBe(false);
+  });
+
   test("dry-run with template variables shows substituted values", async () => {
     const testFile = await createTestAgent(
       tempDir,
@@ -127,7 +165,7 @@ Test prompt for generic file.`
   });
 
   test("dry-run shows estimated token count", async () => {
-    // With real tokenization, repeated "A" characters get tokenized efficiently
+    // The displayed value is intentionally a cheap estimate.
     const promptText = "A".repeat(400);
     const testFile = await createTestAgent(
       tempDir,
@@ -144,14 +182,64 @@ ${promptText}`
     expect(result.stdout).toMatch(/Estimated tokens: ~\d+/);
   });
 
-  test("dry-run does NOT execute the command", async () => {
-    // Create a file that would fail if actually executed (bad command)
+  test("dry-run never imports gpt-tokenizer", async () => {
+    const preloadPath = join(tempDir, `forbid-tokenizer-${Date.now()}.ts`);
+    await writeFile(
+      preloadPath,
+      `Bun.plugin({
+  name: "forbid-gpt-tokenizer",
+  setup(builder) {
+    builder.onLoad({ filter: /gpt-tokenizer/ }, () => {
+      throw new Error("GPT_TOKENIZER_IMPORT_FORBIDDEN");
+    });
+  },
+});
+`,
+    );
     const testFile = await createTestAgent(
       tempDir,
-      "norun.nonexistent-command.md",
+      "no-tokenizer.claude.md",
+      `---
+model: opus
+---
+${"Token estimate text. ".repeat(20)}`,
+    );
+
+    const dryRun = Bun.spawn(
+      [process.execPath, `--preload=${preloadPath}`, "run", CLI_PATH, testFile, "--dry-run"],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+    );
+    const [dryRunStdout, dryRunStderr, dryRunExitCode] = await Promise.all([
+      new Response(dryRun.stdout).text(),
+      new Response(dryRun.stderr).text(),
+      dryRun.exited,
+    ]);
+
+    expect(dryRunExitCode).toBe(0);
+    expect(dryRunStdout).toContain("Estimated tokens:");
+    expect(dryRunStderr).not.toContain("GPT_TOKENIZER_IMPORT_FORBIDDEN");
+
+    // Control: prove the preload hook really catches an accurate-tokenizer import.
+    const control = Bun.spawn(
+      [process.execPath, `--preload=${preloadPath}`, "-e", 'await import("gpt-tokenizer")'],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+    );
+    const [controlStderr, controlExitCode] = await Promise.all([
+      new Response(control.stderr).text(),
+      control.exited,
+    ]);
+    expect(controlExitCode).not.toBe(0);
+    expect(controlStderr).toContain("GPT_TOKENIZER_IMPORT_FORBIDDEN");
+  });
+
+  test("dry-run does NOT execute the command", async () => {
+    // A marker file the flow would create if the command actually ran.
+    const testFile = await createTestAgent(
+      tempDir,
+      "norun.touch.md",
       `---
 ---
-This should not run.`
+${tempDir}/executed-marker`
     );
 
     const result = await spawnMd([testFile, "--_dry-run"]);
@@ -159,7 +247,85 @@ This should not run.`
     // Should exit 0 because dry-run prevents execution
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("DRY RUN");
-    expect(result.stdout).toContain("nonexistent-command");
+    expect(result.stdout).toContain("touch");
+    expect(existsSync(`${tempDir}/executed-marker`)).toBe(false);
+  });
+
+  test("dry-run does not execute inline shell commands or executable fences", async () => {
+    const inlineMarker = join(tempDir, "inline-command-marker");
+    const fenceMarker = join(tempDir, "executable-fence-marker");
+    const testFile = await createTestAgent(
+      tempDir,
+      "pure-plan.claude.md",
+      `---
+model: opus
+---
+Inline output:
+!\`touch ${inlineMarker}\`
+
+Fence output:
+\`\`\`sh
+#!/bin/sh
+touch ${fenceMarker}
+\`\`\``
+    );
+
+    const result = await spawnMd([testFile, "--_dry-run"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Dry Run");
+    expect(result.stdout).toContain("not executed");
+    expect(existsSync(inlineMarker)).toBe(false);
+    expect(existsSync(fenceMarker)).toBe(false);
+  });
+
+  test("remote trust is rejected before inline shell expansion", async () => {
+    const remoteProject = await createTempDir("md-remote-trust-order-");
+    const marker = join(remoteProject.tempDir, "remote-command-marker");
+    const content = `---
+engine: echo
+---
+Before approval:
+!\`touch ${marker}\``;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(content, {
+        headers: { "content-type": "text/markdown; charset=utf-8" },
+      }),
+    });
+
+    try {
+      const result = await spawnMd([`http://127.0.0.1:${server.port}/remote.md`], {
+        cwd: remoteProject.tempDir,
+        env: { HOME: remoteProject.tempDir },
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Untrusted remote domain");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      server.stop(true);
+      await remoteProject.cleanup();
+    }
+  });
+
+  test("unknown filename engine falls through the ladder with a warning (v3)", async () => {
+    const testFile = await createTestAgent(
+      tempDir,
+      "report.nonexistent-command.md",
+      `---
+---
+Just a document with a dotted name.`
+    );
+
+    const result = await spawnMd([testFile]);
+
+    // Not a runnable engine → warned, ladder falls through, and with no
+    // frontmatter the file is printed as a document.
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("ENGINE_NOT_FOUND");
+    expect(result.stdout).toContain("Just a document with a dotted name.");
   });
 
   test("dry-run with additional passthrough flags shows them in command", async () => {
@@ -179,5 +345,45 @@ Test prompt.`
     expect(result.stdout).toContain("--verbose");
     expect(result.stdout).toContain("--debug");
     expect(result.stdout).not.toContain("--_dry-run"); // Should be consumed, not shown
+  });
+
+  test("project codex profile keeps project, isolation, and flow config entries", async () => {
+    const project = await createTempDir("md-dry-run-codex-profile-");
+    try {
+      await writeFile(
+        join(project.tempDir, ".mdflow.yaml"),
+        `engine: codex
+commands:
+  codex:
+    config:
+      - profile=project
+`
+      );
+      const testFile = await createTestAgent(
+        project.tempDir,
+        "flow.md",
+        `---
+model: gpt-5.5
+sandbox: workspace-write
+config: model_reasoning_effort="medium"
+---
+Inspect the project`
+      );
+
+      const result = await spawnMd([testFile, "--_dry-run"], {
+        cwd: project.tempDir,
+        env: { HOME: project.tempDir },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("flow.md → codex (engine: config)");
+      expect(result.stdout).toContain("--ignore-user-config");
+      expect(result.stdout).toContain("--ephemeral");
+      expect(result.stdout).toContain("--config profile=project");
+      expect(result.stdout).toContain("--config project_doc_max_bytes=0");
+      expect(result.stdout).toContain('--config model_reasoning_effort="medium"');
+    } finally {
+      await project.cleanup();
+    }
   });
 });

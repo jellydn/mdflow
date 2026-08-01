@@ -2,12 +2,19 @@
 
 This guide demonstrates 10 progressively more impressive ways to use `mdflow` (`md`). We start with basic scripts and end with a self-orchestrating swarm that works in parallel across multiple git worktrees.
 
+> **Scope:** this tour teaches single-file flow authoring — engines, template
+> variables, imports, piping. The v4 control plane (the `./flows` roster,
+> `md eval`, proposal-first evolution, lifecycle hooks, `md doctor`,
+> `md catalog`, the `--events` stream) lives in the
+> [README](README.md), [GUIDE-NEW-FEATURES.md](GUIDE-NEW-FEATURES.md), and
+> [docs/public-api.md](docs/public-api.md).
+
 ---
 
 ## 1. The "Hello World"
 
-**Concept:** *Command Inference*
-The command to run (`claude`) is inferred automatically from the filename.
+**Concept:** *Engine Inference*
+The engine to run (`claude`) is inferred automatically from the filename. That's just one way to pin an engine — the full resolution ladder is `--engine` flag > `MDFLOW_ENGINE` env var > filename > frontmatter `engine:` > config > the built-in default (`pi`).
 
 **File:** `01-hello.claude.md`
 
@@ -31,19 +38,16 @@ md 01-hello.claude.md
 **Concept:** *Template Variables & Defaults*
 Variables starting with `_` define defaults that can be overridden by CLI flags.
 
-**File:** `02-config.gemini.md`
+**File:** `02-config.claude.md`
 
 ```markdown
 ---
-model: gemini-1.5-flash
+model: haiku
 # Template variables with defaults
-_env: development
+_mode: development
 _port: 8080
-# Pass-through flags for Gemini
-temperature: 0.1
-json: true
 ---
-Generate a JSON configuration for a server running in **{{ _env }}** mode on port **{{ _port }}**.
+Generate a JSON configuration for a server running in **{{ _mode }}** mode on port **{{ _port }}**.
 Return ONLY the raw JSON.
 ```
 
@@ -51,10 +55,10 @@ Return ONLY the raw JSON.
 
 ```bash
 # Use defaults
-md 02-config.gemini.md
+md 02-config.claude.md
 
 # Override with flags
-md 02-config.gemini.md --_env production --_port 3000
+md 02-config.claude.md --_mode production --_port 3000
 ```
 
 ---
@@ -150,14 +154,13 @@ md 05-mock-gen.claude.md > mock-user.json
 ## 6. The Auditor
 
 **Concept:** *Glob Imports & Environment Config*
-Import entire directory trees. We set `MDFLOW_FORCE_CONTEXT` in `env` to override the default token safety limit for large imports.
+Import entire directory trees. We set `MDFLOW_FORCE_CONTEXT` in `_env` to override the default token safety limit for large imports.
 
-**File:** `06-audit.gemini.md`
+**File:** `06-audit.agy.md`
 
 ```markdown
 ---
-model: gemini-1.5-pro
-env:
+_env:
   MDFLOW_FORCE_CONTEXT: "1"
 ---
 You are a Security Auditor. Scan the following files for hardcoded secrets or unsafe regex:
@@ -170,7 +173,7 @@ List any vulnerabilities found.
 **Run it:**
 
 ```bash
-md 06-audit.gemini.md
+md 06-audit.agy.md
 ```
 
 ---
@@ -246,10 +249,10 @@ Run an agent directly from a URL without downloading it. Perfect for sharing tea
 md https://raw.githubusercontent.com/johnlindquist/mdflow/main/examples/hello.claude.md
 ```
 
-Remote URLs are cached locally for 1 hour. Use `--no-cache` to force a fresh fetch:
+Remote URLs are cached locally for 1 hour. Use `--_no-cache` to force a fresh fetch:
 
 ```bash
-md https://example.com/agent.claude.md --no-cache
+md https://example.com/agent.claude.md --_no-cache
 ```
 
 ---
@@ -347,13 +350,13 @@ Missing required variables. Please provide values:
 
 **Concept:** *Trust & Verification*
 **UX Problem:** You are about to run an agent on your entire codebase, but you're nervous about token costs or context size.
-**Solution:** Use `--dry-run` to see exactly what *would* happen—the command, the expanded files, and the token count—without executing anything.
+**Solution:** Use `--_dry-run` to see exactly what *would* happen—the command, the expanded files, and the token count—without executing anything.
 
-**File:** `12-refactor.gemini.md`
+**File:** `12-refactor.claude.md`
 
 ```markdown
 ---
-model: gemini-1.5-pro
+model: opus
 ---
 Refactor every file in this directory:
 @./src/**/*.ts
@@ -362,14 +365,14 @@ Refactor every file in this directory:
 **Run it:**
 
 ```bash
-md 12-refactor.gemini.md --dry-run
+md 12-refactor.claude.md --_dry-run
 ```
 
 **Output:**
 
 ```text
 DRY RUN - Command will NOT be executed
-Command: gemini --model gemini-1.5-pro ...
+Command: claude --model opus ...
 Final Prompt: (Shows full expanded content of all files)
 Estimated tokens: ~15,420
 ```
@@ -389,7 +392,7 @@ Estimated tokens: ~15,420
 ```markdown
 #!/usr/bin/env md
 ---
-command: claude
+engine: claude
 model: haiku
 ---
 Generate a "Daily Standup" update based on my git activity:
@@ -413,12 +416,10 @@ chmod +x daily-report
 **UX Problem:** You want to expose configuration settings (defaults) that users can easily override via flags.
 **Solution:** Variables starting with `_` in the frontmatter define defaults that can be overridden via `--_varname` flags.
 
-**File:** `14-translator.gpt.md`
+**File:** `14-translator.copilot.md`
 
 ```markdown
 ---
-command: openai
-model: gpt-4o
 # Default configuration
 _lang: Spanish
 _tone: Professional
@@ -435,10 +436,10 @@ Translate the following text into {{ _lang }}. Keep the tone {{ _tone }}.
 
 ```bash
 # Use defaults
-md 14-translator.gpt.md --_text "Hello World"
+md 14-translator.copilot.md --_text "Hello World"
 
 # Tweak the knobs via flags
-md 14-translator.gpt.md --_text "Hello World" --_lang "Pirate" --_tone "Aggressive"
+md 14-translator.copilot.md --_text "Hello World" --_lang "Pirate" --_tone "Aggressive"
 ```
 
 *UX Benefit: Creates a stable CLI interface for your prompts.*
@@ -531,11 +532,11 @@ Write a curl command to check the health of:
 
 ## 18. The Chameleon (Polymorphism)
 
-**Concept:** *Command Override*
+**Concept:** *Engine Override*
 **UX Problem:** You want to A/B test a prompt against different models without creating multiple files.
-**Solution:** Override the inferred command using the `-c` flag.
+**Solution:** Pick the engine explicitly with the `--engine` flag — the top rung of the resolution ladder. (The old `--_command`/`-_c` and `--tool` flags still work as deprecated aliases.)
 
-**File:** `18-story.md` (No command in filename)
+**File:** `18-story.md` (No engine in filename)
 
 ```markdown
 Write a two-sentence horror story about a compiler.
@@ -545,11 +546,13 @@ Write a two-sentence horror story about a compiler.
 
 ```bash
 # Test with Claude
-md 18-story.md -c claude --model haiku
+md 18-story.md --engine claude --model haiku
 
-# Test with Gemini
-md 18-story.md -c gemini --model gemini-1.5-flash
+# Test with Antigravity
+md 18-story.md --engine agy
 ```
+
+Without an explicit engine, this file has no frontmatter — so `md 18-story.md` treats it as a document and prints it instead of executing it.
 
 *UX Benefit: Decouple your prompt logic from specific providers.*
 
@@ -581,7 +584,7 @@ md 19-mystery.claude.md
 ```bash
 md logs
 # Agent logs:
-#   /Users/me/.mdflow/logs/19-mystery-claude/
+#   ~/.mdflow/logs/<agent-name>/
 ```
 
 *UX Benefit: Instant forensic debugging without cluttering your terminal.*
@@ -618,3 +621,202 @@ md 20-agent-smith.claude.md --_goal "Review my rust code" > review-rust.claude.m
 ```
 
 *UX Benefit: The tool helps you build the tool.*
+
+---
+
+# Part 3: New Features Tour
+
+These examples demonstrate the latest features added to mdflow.
+
+---
+
+## 21. The Form Builder
+
+**Concept:** *Typed Interactive Inputs*
+**UX Problem:** You want a proper form with different input types, not just text prompts.
+**Solution:** Use the new `_inputs` object format with typed fields.
+
+**File:** `21-deploy-wizard.claude.md`
+
+```markdown
+---
+model: sonnet
+_inputs:
+  _service:
+    type: text
+    description: "Service name"
+    default: "api"
+  _environment:
+    type: select
+    options: [development, staging, production]
+  _replicas:
+    type: number
+    description: "Number of replicas"
+  _dry_run:
+    type: confirm
+    description: "Dry run only?"
+---
+Generate a deployment manifest for {{ _service }} in {{ _environment }}.
+{% if _replicas > 1 %}Use {{ _replicas }} replicas for high availability.{% endif %}
+{% if _dry_run %}This is a dry run - just show what would happen.{% endif %}
+```
+
+**Run it:**
+
+```bash
+md 21-deploy-wizard.claude.md
+```
+
+*UX Benefit: Type-safe forms with select dropdowns, number inputs, and confirmations.*
+
+---
+
+## 22. The Inspector
+
+**Concept:** *Configuration Debugging*
+**UX Problem:** Your agent isn't running as expected, and you need to see what's actually being sent.
+**Solution:** Use `md explain` to see the fully resolved configuration.
+
+**Run it:**
+
+```bash
+md explain review.claude.md
+```
+
+**Output:**
+
+```text
+╭─ Agent Analysis ──────────────────────────────────────────────╮
+│ Command:        claude (from filename: review.claude.md)      │
+│ Interactive:    false (default: print mode)                   │
+│                                                               │
+│ Config Chain:                                                 │
+│   ✓ Built-in defaults                                         │
+│   ✓ ~/.mdflow/config.yaml                                     │
+│   ✗ ./mdflow.config.yaml (not found)                          │
+│   ✓ Frontmatter                                               │
+│                                                               │
+│ Final Flags:    --model opus --print                          │
+│ Token Usage:    ~12,450 / 100,000 (12.4%)                    │
+╰───────────────────────────────────────────────────────────────╯
+```
+
+Agents and GUIs can get the same explanation as a stable JSON object:
+`md explain review.claude.md --json` emits the Flow UX Protocol explanation
+(engine, args, resolved prompt, config fingerprint — see
+[docs/public-api.md](docs/public-api.md)).
+
+*UX Benefit: Understand exactly what md will do before running it.*
+
+---
+
+## 23. The Preflight Check
+
+**Concept:** *Context Visualization*
+**UX Problem:** You're importing many files and want to verify the context before sending to the LLM.
+**Solution:** Use `--_context` to see the context tree and exit.
+
+**File:** `23-review-all.claude.md`
+
+```markdown
+---
+model: opus
+---
+Review this entire codebase:
+@./src/**/*.ts
+@./tests/**/*.ts
+```
+
+**Run it:**
+
+```bash
+md 23-review-all.claude.md --_context
+```
+
+**Output:**
+
+```text
+┌─ Pre-Flight ──────────────────────────────────────────────────┐
+│  📄 23-review-all.claude.md                            0.2 KB │
+│  ├── 📁 @./src/**/*.ts                     (24 files) 48.3 KB │
+│  └── 📁 @./tests/**/*.ts                   (12 files) 22.1 KB │
+│                                                               │
+│  Total: 70.6 KB (~17,650 tokens)                             │
+└───────────────────────────────────────────────────────────────┘
+```
+
+*UX Benefit: Know your token budget before committing to an expensive API call.*
+
+---
+
+## 24. The Editor's Cut
+
+**Concept:** *Edit Before Execute*
+**UX Problem:** You want to tweak the final prompt after all imports are resolved.
+**Solution:** Use `--_edit` to open the fully resolved prompt in your editor.
+
+**File:** `24-summarize.claude.md`
+
+```markdown
+---
+model: haiku
+---
+Summarize this code:
+@./src/main.ts
+```
+
+**Run it:**
+
+```bash
+md 24-summarize.claude.md --_edit
+```
+
+Your `$EDITOR` opens with the fully expanded prompt. Make any changes, save, and close. The edited version is then sent to the LLM.
+
+*UX Benefit: Last-chance editing for context-sensitive adjustments.*
+
+---
+
+## 25. The Pretty Printer
+
+**Concept:** *Rich Terminal Output*
+**UX Problem:** LLM output with code blocks looks ugly in the terminal.
+**Solution:** mdflow now renders markdown with syntax highlighting by default.
+
+**Run it:**
+
+```bash
+md explain-code.claude.md  # Beautiful syntax-highlighted output
+```
+
+For piping to other tools, use `--raw`:
+
+```bash
+md generate-json.claude.md --raw | jq .
+```
+
+*UX Benefit: Professional-looking output that's easy to read.*
+
+---
+
+## 26. The Flow Workbench
+
+**Concept:** *Search-First Flow Catalog*
+**UX Problem:** You have many flows spread across projects, global installs, and PATH, and finding the right one takes time.
+**Solution:** Bare `md` opens the Flow Workbench — one searchable catalog of every discoverable flow.
+
+**Run it:**
+
+```bash
+md   # No arguments - opens the Workbench
+```
+
+The Workbench lists project flows, globally installed flows, and runnable
+Markdown flows found on `PATH`, each labeled with its provenance
+(`PROJECT`, `GLOBAL`, `INSTALLED`, `PATH`). Type to filter, then pick an
+action per flow — run, dry-run, edit, hooks, feedback — with each action
+marked FREE, ENGINE, or LOCAL WRITE. If the project has no roster yet, a
+"Set up project flows…" row opens guided setup without leaving the
+Workbench. Frequently and recently used flows still sort toward the top.
+
+*UX Benefit: Your entire flow roster — wherever it lives — is a keystroke away.*
